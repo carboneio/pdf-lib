@@ -172,6 +172,7 @@ export default class PDFDocument {
       capNumbers = false,
       password,
       forIncrementalUpdate = false,
+      dedupeContent = false,
     } = options;
 
     assertIs(pdf, 'pdf', ['string', Uint8Array, ArrayBuffer]);
@@ -212,11 +213,21 @@ export default class PDFDocument {
         ),
         forIncrementalUpdate,
       ).parseDocument();
-      const pdfDoc = new PDFDocument(decryptedContext, true, updateMetadata);
+      const pdfDoc = new PDFDocument(
+        decryptedContext,
+        true,
+        updateMetadata,
+        dedupeContent,
+      );
       if (forIncrementalUpdate) pdfDoc.takeSnapshot();
       return pdfDoc;
     } else {
-      const pdfDoc = new PDFDocument(context, ignoreEncryption, updateMetadata);
+      const pdfDoc = new PDFDocument(
+        context,
+        ignoreEncryption,
+        updateMetadata,
+        dedupeContent,
+      );
       if (forIncrementalUpdate) pdfDoc.takeSnapshot();
       return pdfDoc;
     }
@@ -227,7 +238,7 @@ export default class PDFDocument {
    * @returns Resolves with the newly created document.
    */
   static async create(options: CreateOptions = {}) {
-    const { updateMetadata = true } = options;
+    const { updateMetadata = true, dedupeContent = false } = options;
 
     const context = PDFContext.create();
     const pageTree = PDFPageTree.withContext(context);
@@ -235,7 +246,7 @@ export default class PDFDocument {
     const catalog = PDFCatalog.withContextAndPages(context, pageTreeRef);
     context.trailerInfo.Root = context.register(catalog);
 
-    return new PDFDocument(context, false, updateMetadata);
+    return new PDFDocument(context, false, updateMetadata, dedupeContent);
   }
 
   /** The low-level context of this document. */
@@ -262,10 +273,10 @@ export default class PDFDocument {
   private readonly javaScripts: PDFJavaScript[];
 
   /**
-   * Reuse one [[PDFObjectCopier]] per source [[PDFContext]] so that fonts,
-   * images, and other shared resources are copied once when pulling multiple
-   * pages from the same loaded document across separate [[embedPage]],
-   * [[embedPages]], or [[copyPages]] calls.
+   * When `dedupeContent` is true: reuse one [[PDFObjectCopier]] per source
+   * [[PDFContext]] so fonts, images, and other shared resources are copied once
+   * when pulling multiple pages from the same loaded document across separate
+   * [[embedPage]], [[embedPages]], or [[copyPages]] calls.
    */
   private readonly foreignObjectCopiers = new WeakMap<
     PDFContext,
@@ -275,15 +286,25 @@ export default class PDFDocument {
   /** Shared by all foreign copiers: dedupe identical streams in the output. */
   private readonly mergedStreamDedup = new Map<string, PDFRef>();
 
+  /**
+   * When true, [[copyPages]] / [[embedPages]] use [[foreignObjectCopierFor]] so
+   * stream payloads can be merged across calls. When false (the default), each
+   * call uses a fresh [[PDFObjectCopier]] without that cross-call deduplication.
+   */
+  private readonly dedupeContent: boolean;
+
   private constructor(
     context: PDFContext,
     ignoreEncryption: boolean,
     updateMetadata: boolean,
+    dedupeContent: boolean,
   ) {
     assertIs(context, 'context', [[PDFContext, 'PDFContext']]);
     assertIs(ignoreEncryption, 'ignoreEncryption', ['boolean']);
+    assertIs(dedupeContent, 'dedupeContent', ['boolean']);
 
     this.context = context;
+    this.dedupeContent = dedupeContent;
     this.catalog = context.lookup(context.trailerInfo.Root) as PDFCatalog;
 
     if (!!context.lookup(context.trailerInfo.Encrypt) && context.isDecrypted) {
@@ -841,17 +862,22 @@ export default class PDFDocument {
    * @param srcDoc The document from which pages should be copied.
    * @param indices The indices of the pages that should be copied.
    * @returns Resolves with an array of pages copied into this document.
-   * Multiple calls with the same `srcDoc` reuse one copier so shared fonts and
-   * images are not duplicated in the output. Identical streams (e.g. embedded
-   * font files) and matching resource dictionaries are also merged across
-   * *different* source documents when the stream dictionary and decoded bytes
-   * both match (fonts and images are safe; whole `/Resources` dicts are not merged).
+   * With `dedupeContent: true` (pass `{ dedupeContent: true }` to [[create]] or
+   * [[load]]), multiple calls with the same `srcDoc` reuse one copier so shared
+   * fonts and images are not duplicated in the output. Identical streams (e.g.
+   * embedded font files) and matching resource dictionaries are also merged
+   * across *different* source documents when deduplication is enabled and the
+   * stream dictionary and decoded bytes both match (fonts and images are safe;
+   * whole `/Resources` dicts are not merged). With `dedupeContent: false` (the
+   * default), each call uses an isolated copier without cross-call stream merging.
    */
   async copyPages(srcDoc: PDFDocument, indices: number[]): Promise<PDFPage[]> {
     assertIs(srcDoc, 'srcDoc', [[PDFDocument, 'PDFDocument']]);
     assertIs(indices, 'indices', [Array]);
     await srcDoc.flush();
-    const copier = this.foreignObjectCopierFor(srcDoc.context);
+    const copier = this.dedupeContent
+      ? this.foreignObjectCopierFor(srcDoc.context)
+      : PDFObjectCopier.for(srcDoc.context, this.context);
     const srcPages = srcDoc.getPages();
     // Copy each page in a separate thread
     const copiedPages = indices
@@ -1508,9 +1534,11 @@ export default class PDFDocument {
    *
    * @param page
    * The pages to be embedded (they must all share the same context).
-   * When embedding from another [[PDFDocument]], fonts and other resources
+   * With `dedupeContent: true` on [[create]] / [[load]], fonts and other resources
    * are copied once per source document for the lifetime of this document:
    * separate calls still reuse the same copier (same as batching pages here).
+   * With `dedupeContent: false` (the default), each [[embedPages]] call uses an
+   * isolated copier without that reuse.
    * @param boundingBoxes
    * Optionally, an array of clipping boundaries - one for each page
    * (defaults to entirety of each page).
@@ -1536,10 +1564,16 @@ export default class PDFDocument {
     }
 
     const context = pages[0].node.context;
-    const maybeCopyPage =
-      context === this.context
-        ? (p: PDFPageLeaf) => p
-        : (p: PDFPageLeaf) => this.foreignObjectCopierFor(context).copy(p);
+    let maybeCopyPage: (p: PDFPageLeaf) => PDFPageLeaf;
+    if (context === this.context) {
+      maybeCopyPage = (p) => p;
+    } else if (this.dedupeContent) {
+      const copier = this.foreignObjectCopierFor(context);
+      maybeCopyPage = (p) => copier.copy(p);
+    } else {
+      const copier = PDFObjectCopier.for(context, this.context);
+      maybeCopyPage = (p) => copier.copy(p);
+    }
 
     const embeddedPages = new Array<PDFEmbeddedPage>(pages.length);
     for (let idx = 0, len = pages.length; idx < len; idx++) {
