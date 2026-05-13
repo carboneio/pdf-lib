@@ -1,11 +1,19 @@
 import PDFArray from './objects/PDFArray';
+import PDFBool from './objects/PDFBool';
 import PDFDict from './objects/PDFDict';
+import PDFHexString from './objects/PDFHexString';
 import PDFName from './objects/PDFName';
+import PDFNull from './objects/PDFNull';
+import PDFNumber from './objects/PDFNumber';
 import PDFObject from './objects/PDFObject';
+import PDFRawStream from './objects/PDFRawStream';
 import PDFRef from './objects/PDFRef';
 import PDFStream from './objects/PDFStream';
+import PDFString from './objects/PDFString';
 import PDFContext from './PDFContext';
+import PDFContentStream from './structures/PDFContentStream';
 import PDFPageLeaf from './structures/PDFPageLeaf';
+import { decodePDFRawStream } from './streams/decode';
 
 /**
  * PDFObjectCopier copies PDFObjects from a src context to a dest context.
@@ -27,18 +35,36 @@ import PDFPageLeaf from './structures/PDFPageLeaf';
  * (or structures build from them) can contain indirect references to other
  * objects. Copying a PDFObject that is not a dictionary, array, or stream is
  * supported, but is equivalent to cloning it.
+ *
+ * When copying indirect objects, identical stream **payloads** (after
+ * decoding) are merged only together with a matching stream-dictionary
+ * fingerprint (BBox, Subtype, etc.), so page content and form XObjects are not
+ * confused when byte content happens to match. Dictionary-level merging of
+ * fonts or `/Resources` is not done — it caused encoding / glyph mismatches.
+ *
+ * Pass an optional shared `streamKeyToDestRef` map so identical streams can
+ * merge across different source documents merged into one output.
  */
 class PDFObjectCopier {
-  static for = (src: PDFContext, dest: PDFContext) =>
-    new PDFObjectCopier(src, dest);
+  static for = (
+    src: PDFContext,
+    dest: PDFContext,
+    streamKeyToDestRef?: Map<string, PDFRef>,
+  ) => new PDFObjectCopier(src, dest, streamKeyToDestRef);
 
   private readonly src: PDFContext;
   private readonly dest: PDFContext;
   private readonly traversedObjects = new Map<PDFObject, PDFObject>();
+  private readonly streamKeyToDestRef: Map<string, PDFRef>;
 
-  private constructor(src: PDFContext, dest: PDFContext) {
+  private constructor(
+    src: PDFContext,
+    dest: PDFContext,
+    streamKeyToDestRef?: Map<string, PDFRef>,
+  ) {
     this.src = src;
     this.dest = dest;
+    this.streamKeyToDestRef = streamKeyToDestRef ?? new Map();
   }
 
   // prettier-ignore
@@ -123,21 +149,141 @@ class PDFObjectCopier {
   };
 
   private copyPDFIndirectObject = (ref: PDFRef): PDFRef => {
-    const alreadyMapped = this.traversedObjects.has(ref);
+    if (this.traversedObjects.has(ref)) {
+      return this.traversedObjects.get(ref) as PDFRef;
+    }
 
-    if (!alreadyMapped) {
-      const newRef = this.dest.nextRef();
-      this.traversedObjects.set(ref, newRef);
+    const dereferencedValue = this.src.lookup(ref);
 
-      const dereferencedValue = this.src.lookup(ref);
-      if (dereferencedValue) {
-        const cloned = this.copy(dereferencedValue);
-        this.dest.assign(newRef, cloned);
+    if (dereferencedValue) {
+      if (dereferencedValue instanceof PDFStream) {
+        const streamKey = this.streamByteDedupKey(dereferencedValue);
+        if (streamKey) {
+          const existingStreamRef = this.streamKeyToDestRef.get(streamKey);
+          if (existingStreamRef) {
+            this.traversedObjects.set(ref, existingStreamRef);
+            return existingStreamRef;
+          }
+        }
       }
     }
 
-    return this.traversedObjects.get(ref) as PDFRef;
+    const newRef = this.dest.nextRef();
+    this.traversedObjects.set(ref, newRef);
+
+    if (dereferencedValue) {
+      const cloned = this.copy(dereferencedValue);
+      this.dest.assign(newRef, cloned);
+
+      if (dereferencedValue instanceof PDFStream) {
+        const streamKey = this.streamByteDedupKey(dereferencedValue);
+        if (streamKey) {
+          this.streamKeyToDestRef.set(streamKey, newRef);
+        }
+      }
+    }
+
+    return newRef;
   };
+
+  private fnv1a32(data: Uint8Array): number {
+    let h = 2166136261;
+    for (let idx = 0, len = data.length; idx < len; idx++) {
+      h ^= data[idx];
+      h = Math.imul(h, 16777619);
+    }
+    return h >>> 0;
+  }
+
+  private streamByteDedupKey(stream: PDFStream): string | undefined {
+    try {
+      if (stream instanceof PDFRawStream) {
+        try {
+          const decoded = decodePDFRawStream(stream).decode();
+          return this.streamKeyFromDecoded(stream, decoded);
+        } catch {
+          const raw = stream.getContents();
+          return `${this.streamDictFingerprint(stream.dict)}:raw:${raw.length}:${this.fnv1a32(raw)}`;
+        }
+      }
+      if (stream instanceof PDFContentStream) {
+        const decoded = stream.getUnencodedContents();
+        return this.streamKeyFromDecoded(stream, decoded);
+      }
+      return undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  private streamKeyFromDecoded(stream: PDFStream, decoded: Uint8Array): string {
+    const dictFp = this.streamDictFingerprint(stream.dict);
+    const parts: string[] = [
+      dictFp,
+      String(decoded.length),
+      String(this.fnv1a32(decoded)),
+    ];
+    return parts.join(':');
+  }
+
+  /**
+   * Stream bodies can match while PDF semantics differ (e.g. two Form XObjects
+   * with different BBox). Include all dict entries except ones that only
+   * describe encoding of the byte payload.
+   */
+  private streamDictFingerprint(dict: PDFDict): string {
+    const skipKeys = new Set([
+      'Length',
+      'Filter',
+      'DecodeParms',
+      'DL',
+      'F',
+      'FFilter',
+      'FDecodeParms',
+    ]);
+    const ents = dict.entries().slice();
+    ents.sort((a, b) => a[0].asString().localeCompare(b[0].asString()));
+    const parts = new Array<string>(ents.length);
+    let n = 0;
+    for (let idx = 0, len = ents.length; idx < len; idx++) {
+      const [key, value] = ents[idx];
+      if (skipKeys.has(key.asString())) continue;
+      parts[n++] =
+        `${key.asString()}=${this.streamDictValueFingerprint(value)}`;
+    }
+    parts.length = n;
+    return parts.join('|');
+  }
+
+  private streamDictValueFingerprint(value: PDFObject): string {
+    if (value instanceof PDFName) return `N(${value.asString()})`;
+    if (value instanceof PDFNumber) return `Num(${value.asNumber()})`;
+    if (value instanceof PDFString) return `S(${value.asString()})`;
+    if (value instanceof PDFHexString) return `H(${value.asString()})`;
+    if (value instanceof PDFBool) {
+      return value.asBoolean() ? 'B(true)' : 'B(false)';
+    }
+    if (value === PDFNull) return 'null';
+    if (value instanceof PDFRef) {
+      return `R(${value.objectNumber}.${value.generationNumber})`;
+    }
+    if (value instanceof PDFArray) {
+      const items = new Array<string>(value.size());
+      for (let idx = 0, len = value.size(); idx < len; idx++) {
+        items[idx] = this.streamDictValueFingerprint(value.get(idx));
+      }
+      return `[${items.join(',')}]`;
+    }
+    if (value instanceof PDFDict) {
+      const ents = value.entries().slice();
+      ents.sort((a, b) => a[0].asString().localeCompare(b[0].asString()));
+      const inner = ents.map(
+        ([k, v]) => `${k.asString()}=${this.streamDictValueFingerprint(v)}`,
+      );
+      return `{${inner.join(';')}}`;
+    }
+    return '?';
+  }
 }
 
 export default PDFObjectCopier;

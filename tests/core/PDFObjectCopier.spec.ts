@@ -418,4 +418,96 @@ describe('PDFObjectCopier', () => {
     expect(copiedDict.entries().length).toBe(1);
     expect(copiedDict.get(PDFName.of('Foo'))).toBe(PDFRef.of(1));
   });
+
+  it('deduplicates indirect streams with identical decoded content', () => {
+    const src = PDFContext.create();
+    const dest = PDFContext.create();
+
+    const fontBytes = new Uint8Array([0, 1, 2, 3, 4, 5]);
+    const s1 = PDFRawStream.of(
+      src.obj({ Length: fontBytes.length }),
+      fontBytes.slice(),
+    );
+    const s2 = PDFRawStream.of(
+      src.obj({ Length: fontBytes.length }),
+      fontBytes.slice(),
+    );
+    src.assign(PDFRef.of(1), s1);
+    src.assign(PDFRef.of(2), s2);
+
+    const wrapper = src.obj({
+      A: PDFRef.of(1),
+      B: PDFRef.of(2),
+    });
+
+    const copier = PDFObjectCopier.for(src, dest);
+    const copiedWrapper = copier.copy(wrapper);
+
+    const rA = copiedWrapper.get(PDFName.of('A')) as PDFRef;
+    const rB = copiedWrapper.get(PDFName.of('B')) as PDFRef;
+    expect(rA).toBe(rB);
+
+    const indirectStreams = dest
+      .enumerateIndirectObjects()
+      .filter(([, o]) => o instanceof PDFRawStream);
+    expect(indirectStreams.length).toBe(1);
+  });
+
+  it('does not merge streams with identical bytes but different stream dictionaries', () => {
+    const src = PDFContext.create();
+    const dest = PDFContext.create();
+    const bytes = new Uint8Array([1, 2, 3]);
+    const s1 = PDFRawStream.of(
+      src.obj({
+        Length: bytes.length,
+        Type: 'XObject',
+        Subtype: 'Form',
+        BBox: [0, 0, 100, 100],
+      }),
+      bytes.slice(),
+    );
+    const s2 = PDFRawStream.of(
+      src.obj({
+        Length: bytes.length,
+        Type: 'XObject',
+        Subtype: 'Form',
+        BBox: [0, 0, 200, 200],
+      }),
+      bytes.slice(),
+    );
+    src.assign(PDFRef.of(1), s1);
+    src.assign(PDFRef.of(2), s2);
+    const wrapper = src.obj({ A: PDFRef.of(1), B: PDFRef.of(2) });
+    const copiedWrapper = PDFObjectCopier.for(src, dest).copy(wrapper);
+    const rA = copiedWrapper.get(PDFName.of('A')) as PDFRef;
+    const rB = copiedWrapper.get(PDFName.of('B')) as PDFRef;
+    expect(rA).not.toBe(rB);
+  });
+
+  it('deduplicates identical streams across separate copiers when maps are shared', () => {
+    const src1 = PDFContext.create();
+    const src2 = PDFContext.create();
+    const dest = PDFContext.create();
+    const streamDedup = new Map<string, PDFRef>();
+
+    const bytes = new Uint8Array([7, 8, 9]);
+    const s1 = PDFRawStream.of(
+      src1.obj({ Length: bytes.length }),
+      bytes.slice(),
+    );
+    const s2 = PDFRawStream.of(
+      src2.obj({ Length: bytes.length }),
+      bytes.slice(),
+    );
+    src1.assign(PDFRef.of(1), s1);
+    src2.assign(PDFRef.of(1), s2);
+
+    const w1 = src1.obj({ X: PDFRef.of(1) });
+    const w2 = src2.obj({ X: PDFRef.of(1) });
+
+    const c1 = PDFObjectCopier.for(src1, dest, streamDedup).copy(w1);
+    const c2 = PDFObjectCopier.for(src2, dest, streamDedup).copy(w2);
+
+    expect(c1.get(PDFName.of('X'))).toBe(c2.get(PDFName.of('X')));
+  });
 });

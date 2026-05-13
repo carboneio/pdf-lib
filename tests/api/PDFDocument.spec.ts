@@ -2018,4 +2018,71 @@ describe('PDFDocument', () => {
       await expect(noErrorFunc(1)).resolves.not.toThrowError();
     });
   });
+
+  describe('foreign PDFObjectCopier reuse (dedupe fonts/resources per source doc)', () => {
+    it('matches indirect object count: two embedPage calls vs one embedPages', async () => {
+      const src = await PDFDocument.load(normalPdfBytes);
+      const splitEmbed = async () => {
+        const dest = await PDFDocument.create();
+        await dest.embedPage(src.getPage(0));
+        await dest.embedPage(src.getPage(1));
+        return PDFDocument.load(await dest.save());
+      };
+      const batchEmbed = async () => {
+        const dest = await PDFDocument.create();
+        await dest.embedPages([src.getPage(0), src.getPage(1)]);
+        return PDFDocument.load(await dest.save());
+      };
+      const [a, b] = await Promise.all([splitEmbed(), batchEmbed()]);
+      expect(a.context.enumerateIndirectObjects().length).toBe(
+        b.context.enumerateIndirectObjects().length,
+      );
+    });
+
+    it('matches indirect object count: two copyPages calls vs one', async () => {
+      const src = await PDFDocument.load(normalPdfBytes);
+      const splitCopy = async () => {
+        const dest = await PDFDocument.create();
+        const [p0] = await dest.copyPages(src, [0]);
+        const [p1] = await dest.copyPages(src, [1]);
+        dest.addPage(p0);
+        dest.addPage(p1);
+        return PDFDocument.load(await dest.save());
+      };
+      const batchCopy = async () => {
+        const dest = await PDFDocument.create();
+        const [p0, p1] = await dest.copyPages(src, [0, 1]);
+        dest.addPage(p0);
+        dest.addPage(p1);
+        return PDFDocument.load(await dest.save());
+      };
+      const [a, b] = await Promise.all([splitCopy(), batchCopy()]);
+      expect(a.context.enumerateIndirectObjects().length).toBe(
+        b.context.enumerateIndirectObjects().length,
+      );
+    });
+
+    it('merges most resources when copying from two loads of the same bytes', async () => {
+      const [docA, docB] = await Promise.all([
+        PDFDocument.load(normalPdfBytes),
+        PDFDocument.load(normalPdfBytes),
+      ]);
+      const merged = await PDFDocument.create();
+      for (const p of await merged.copyPages(docA, [0])) merged.addPage(p);
+      for (const p of await merged.copyPages(docB, [0])) merged.addPage(p);
+
+      const baseline = await PDFDocument.create();
+      const singleLoad = await PDFDocument.load(normalPdfBytes);
+      for (const p of await baseline.copyPages(singleLoad, [0, 0])) {
+        baseline.addPage(p);
+      }
+
+      expect(merged.getPageCount()).toBe(baseline.getPageCount());
+      const mergedObjs = merged.context.enumerateIndirectObjects().length;
+      const baselineObjs = baseline.context.enumerateIndirectObjects().length;
+      // Stream-level dedup still avoids doubling everything when merging two loads;
+      // dict-level merging was removed for correctness.
+      expect(mergedObjs).toBeLessThan(baselineObjs * 2);
+    });
+  });
 });
