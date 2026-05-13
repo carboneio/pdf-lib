@@ -6,7 +6,7 @@ This fork follows the fork of https://github.com/cantoo-scribe/pdf-lib and adds 
 
 We will maintain this project as long as we need it but cannot guarantee the support for issues too far from our own roadmap.
 
-Install with: `npm install @carbone/pdf-lib`
+Install with: `npm install @carboneio/pdf-lib`
 
 <hr/>
 
