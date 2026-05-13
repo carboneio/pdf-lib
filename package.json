@@ -1,5 +1,5 @@
 {
-  "name": "@carbone/pdf-lib",
+  "name": "@carboneio/pdf-lib",
   "version": "2.7.0",
   "description": "Create and modify PDF files with JavaScript",
   "author": "Andrew Dillon <andrew.dillon.j@gmail.com>",
