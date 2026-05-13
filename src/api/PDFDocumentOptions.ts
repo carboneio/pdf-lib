@@ -36,10 +36,24 @@ export interface LoadOptions {
   capNumbers?: boolean;
   password?: string;
   forIncrementalUpdate?: boolean;
+  /**
+   * When true, [[PDFDocument.copyPages]] and [[PDFDocument.embedPages]] reuse a
+   * per-source copier and merge identical stream payloads across calls (smaller
+   * output). When false (the default), each call uses an isolated copier without
+   * cross-call stream deduplication.
+   */
+  dedupeContent?: boolean;
 }
 
 export interface CreateOptions {
   updateMetadata?: boolean;
+  /**
+   * When true, [[PDFDocument.copyPages]] and [[PDFDocument.embedPages]] reuse a
+   * per-source copier and merge identical stream payloads across calls (smaller
+   * output). When false (the default), each call uses an isolated copier without
+   * cross-call stream deduplication.
+   */
+  dedupeContent?: boolean;
 }
 
 export interface EmbedFontOptions {

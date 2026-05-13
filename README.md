@@ -1,8 +1,12 @@
-## Forked by [Cantoo](https://cantoo.fr)
+## Forked by [Carbone](https://carbone.io)
 
-This fork adds the support for svg to the pdf-lib project. Until pdf-lib project gets a better maintainance, we will maintain this project as long as we need it but cannot guarantee the support for issues too far from our own roadmap.
+This fork follows the fork of https://github.com/cantoo-scribe/pdf-lib and adds support for new features such as:
+- a maintained changelog
+- optional **`dedupeContent`** on `PDFDocument.create()` and `PDFDocument.load()` (default **`false`**). With **`dedupeContent: true`**, copying or embedding pages from other PDFs avoids duplicating shared fonts and images and usually **reduces the size** of the saved PDF.
 
-Install with: `npm install @cantoo/pdf-lib`
+We will maintain this project as long as we need it but cannot guarantee the support for issues too far from our own roadmap.
+
+Install with: `npm install @carbone/pdf-lib`
 
 <hr/>
 
@@ -69,6 +73,7 @@ Install with: `npm install @cantoo/pdf-lib`
   - [Fill Form](#fill-form)
   - [Flatten Form](#flatten-form)
   - [Copy Pages](#copy-pages)
+  - [dedupeContent option](#dedupecontent-option)
   - [Embed PNG and JPEG Images](#embed-png-and-jpeg-images)
   - [Embed PDF Pages](#embed-pdf-pages)
   - [Embed Font and Measure Text](#embed-font-and-measure-text)
@@ -775,6 +780,15 @@ const pdfBytes = await pdfDoc.save()
 //   • Written to a file in Node
 //   • Downloaded from the browser
 //   • Rendered in an <iframe>
+```
+
+### dedupeContent option
+
+**`dedupeContent`** is an option on `PDFDocument.create()` and `PDFDocument.load()`. When set to **`true`**, it limits duplication of **fonts** and **images** pulled in via `copyPages`, `embedPage`, or `embedPages`, which **reduces PDF file size**. The default is **`false`**.
+
+```js
+const emptyDest = await PDFDocument.create({ dedupeContent: true })
+const loadedDest = await PDFDocument.load(existingPdfBytes, { dedupeContent: true })
 ```
 
 ### Embed PNG and JPEG Images
