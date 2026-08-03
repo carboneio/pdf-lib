@@ -5,7 +5,7 @@ This fork follows the fork of https://github.com/cantoo-scribe/pdf-lib and adds 
 - optimized save, load, and encryption operations
 - optional **`dedupeContent`** on `PDFDocument.create()` and `PDFDocument.load()` (default **`false`**). With **`dedupeContent: true`**, copying or embedding pages from other PDFs avoids duplicating shared fonts and images and usually **reduces the size** of the saved PDF.
 - a maintained [changelog](CHANGELOG.md)
-- Runs an offline test suite that validates 4,009 test points by comparing PDFs with the reliable QPDF library, covering encryption, merging, modifications, and all combinations.
+- Runs an offline test suite that validates 4,009 test points by comparing PDFs with the reliable [QPDF library](https://github.com/qpdf/qpdf), covering encryption, merging, modifications, and all combinations.
 
 We will maintain this project as long as we need it but cannot guarantee the support for issues too far from our own roadmap.
 
