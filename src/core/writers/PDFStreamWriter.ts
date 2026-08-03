@@ -153,14 +153,12 @@ class PDFStreamWriter extends PDFWriter {
 
       // Objects held in an object stream are never encrypted individually; only
       // the object stream's own contents are, using the object stream's key.
-      const streamToWrite = security
-        ? this.encrypt(ref, objectStream, security)
-        : objectStream;
+      if (security) this.encrypt(ref, objectStream, security);
 
       xrefStream.addUncompressedEntry(ref, size);
-      size += this.computeIndirectObjectSize([ref, streamToWrite]);
+      size += this.computeIndirectObjectSize([ref, objectStream]);
 
-      uncompressedObjects.push([ref, streamToWrite]);
+      uncompressedObjects.push([ref, objectStream]);
 
       if (this.shouldWaitForTick(chunk.length)) await waitForTick();
     }

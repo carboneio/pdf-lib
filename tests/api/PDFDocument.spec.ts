@@ -567,29 +567,6 @@ describe('PDFDocument', () => {
       );
     });
 
-    it.each([false, true])(
-      'does not encrypt twice when save() is called repeatedly (useObjectStreams=%s)',
-      async (useObjectStreams) => {
-        const pdfDoc = await PDFDocument.create();
-        pdfDoc.setTitle(title);
-        pdfDoc.setAuthor(author);
-        pdfDoc.addPage();
-        pdfDoc.encrypt({ userPassword: password, ownerPassword: password });
-
-        const first = await pdfDoc.save({ useObjectStreams });
-        const second = await pdfDoc.save({ useObjectStreams });
-
-        for (const bytes of [first, second]) {
-          const loaded = await PDFDocument.load(bytes, {
-            password,
-            updateMetadata: false,
-          });
-          expect(loaded.getTitle()).toBe(title);
-          expect(loaded.getAuthor()).toBe(author);
-        }
-      },
-    );
-
     it('leaves the signed contents of a signature dictionary unencrypted', async () => {
       const signature = 'deadbeef'.repeat(8);
       const pdfDoc = await PDFDocument.create();

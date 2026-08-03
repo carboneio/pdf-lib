@@ -3,7 +3,7 @@ import PDFHeader from '../document/PDFHeader';
 import PDFTrailer from '../document/PDFTrailer';
 import PDFTrailerDict from '../document/PDFTrailerDict';
 import PDFArray from '../objects/PDFArray';
-import PDFDict, { DictMap } from '../objects/PDFDict';
+import PDFDict from '../objects/PDFDict';
 import PDFHexString from '../objects/PDFHexString';
 import PDFObject from '../objects/PDFObject';
 import PDFRef from '../objects/PDFRef';
@@ -22,15 +22,6 @@ import type { DocumentSnapshot } from '../../api/snapshot';
 import PDFNumber from '../objects/PDFNumber';
 import PDFName from '../objects/PDFName';
 import PDFRawStream from '../objects/PDFRawStream';
-
-/** A cross-reference stream is never encrypted, just like a plain trailer. */
-export const isXRefStream = (object: PDFObject): object is PDFStream =>
-  object instanceof PDFStream &&
-  object.dict.lookup(PDFName.of('Type')) === PDFName.of('XRef');
-
-/** Shallow copy that leaves the original untouched (and unmarked as changed). */
-const copyDict = (dict: PDFDict): PDFDict =>
-  PDFDict.fromMapWithContext(new Map(dict.entries()), dict.context);
 
 export interface SerializationInfo {
   size: number;
@@ -278,11 +269,11 @@ class PDFWriter {
   }
 
   /**
-   * Returns the encrypted form of `object`, leaving the original untouched.
+   * Returns the encrypted form of `object`, which for streams, dictionaries and
+   * arrays is `object` itself, encrypted in place.
    *
-   * Nothing is mutated so that a document can be saved more than once without
-   * encrypting the same bytes twice, and so that objects which contain no
-   * strings are shared rather than copied.
+   * Encrypting in place means an already encrypted document must not be saved a
+   * second time: the second save would encrypt the same bytes again.
    */
   protected encrypt(
     ref: PDFRef,
@@ -294,7 +285,12 @@ class PDFWriter {
 
     // A cross-reference stream is written in the clear, like a plain trailer,
     // so neither its contents nor the strings in its dictionary are encrypted.
-    if (isXRefStream(object)) return object;
+    if (
+      object instanceof PDFStream &&
+      object.dict.lookup(PDFName.of('Type')) === PDFName.of('XRef')
+    ) {
+      return object;
+    }
 
     const encryptFn = security.getEncryptFn(
       ref.objectNumber,
@@ -302,74 +298,53 @@ class PDFWriter {
     );
 
     if (object instanceof PDFStream) {
-      // Always copy the dictionary: serializing a stream rewrites /Length, and
-      // that must not touch the original object.
-      const dict = this.encryptStringsInDict(object.dict, encryptFn);
-      return PDFRawStream.of(
-        dict === object.dict ? copyDict(object.dict) : dict,
-        encryptFn(object.getContents()),
-      );
+      object.updateContents(encryptFn(object.getContents()));
+      this.encryptStringsInObject(object.dict, encryptFn);
+      return object;
     }
 
-    return this.encryptStrings(object, encryptFn);
-  }
-
-  /**
-   * Returns `object` with every string it contains encrypted, or `object`
-   * itself when it holds no strings.
-   */
-  private encryptStrings(object: PDFObject, encryptFn: EncryptFn): PDFObject {
+    // Strings are immutable, so an indirect string is replaced rather than
+    // updated. The caller must use the returned object.
     if (object instanceof PDFString || object instanceof PDFHexString) {
       return PDFHexString.fromBytes(encryptFn(object.asBytes()));
     }
-    if (object instanceof PDFDict) {
-      return this.encryptStringsInDict(object, encryptFn);
-    }
-    if (object instanceof PDFArray) {
-      return this.encryptStringsInArray(object, encryptFn);
-    }
+
+    this.encryptStringsInObject(object, encryptFn);
     return object;
   }
 
-  private encryptStringsInDict(dict: PDFDict, encryptFn: EncryptFn): PDFDict {
-    // The signed contents of a signature dictionary are exempt from encryption.
-    const isSignature = dict.lookup(PDFName.of('Type')) === PDFName.of('Sig');
-
-    const entries = dict.entries();
-    let map: DictMap | undefined;
-
-    for (let idx = 0, len = entries.length; idx < len; idx++) {
-      const [key, value] = entries[idx];
-      if (isSignature && key === PDFName.of('Contents')) continue;
-
-      const encrypted = this.encryptStrings(value, encryptFn);
-      if (encrypted === value) continue;
-
-      // Build the copy through the map so cloning never marks the original
-      // object as changed for incremental saves.
-      map = map ?? new Map(entries);
-      map.set(key, encrypted);
-    }
-
-    return map ? PDFDict.fromMapWithContext(map, dict.context) : dict;
-  }
-
-  private encryptStringsInArray(
-    array: PDFArray,
+  private encryptStringsInObject(
+    object: PDFObject,
     encryptFn: EncryptFn,
-  ): PDFArray {
-    let copy: PDFArray | undefined;
+  ): void {
+    if (object instanceof PDFDict) {
+      // The signed contents of a signature dictionary are exempt from
+      // encryption.
+      const isSignature =
+        object.lookup(PDFName.of('Type')) === PDFName.of('Sig');
 
-    for (let idx = 0, len = array.size(); idx < len; idx++) {
-      const value = array.get(idx);
-      const encrypted = this.encryptStrings(value, encryptFn);
-      if (encrypted === value) continue;
+      for (const [key, value] of object.entries()) {
+        if (isSignature && key === PDFName.of('Contents')) continue;
 
-      copy = copy ?? array.clone();
-      copy.set(idx, encrypted);
+        if (value instanceof PDFString || value instanceof PDFHexString) {
+          object.set(key, PDFHexString.fromBytes(encryptFn(value.asBytes())));
+        } else if (value instanceof PDFDict || value instanceof PDFArray) {
+          this.encryptStringsInObject(value, encryptFn);
+        }
+      }
+      return;
     }
 
-    return copy ?? array;
+    if (object instanceof PDFArray) {
+      for (let idx = 0, len = object.size(); idx < len; idx++) {
+        const value = object.get(idx);
+        if (value instanceof PDFString || value instanceof PDFHexString) {
+          object.set(idx, PDFHexString.fromBytes(encryptFn(value.asBytes())));
+        } else if (value instanceof PDFDict || value instanceof PDFArray) {
+          this.encryptStringsInObject(value, encryptFn);
+        }
+      }
+    }
   }
 
   protected shouldWaitForTick = (n: number) => {
