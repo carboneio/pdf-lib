@@ -342,6 +342,21 @@ class PDFObjectParser extends BaseParser {
     while (!this.bytes.done()) {
       end = this.bytes.offset();
 
+      // Every keyword tried below begins with one of these four bytes, and the
+      // stream payload being scanned is usually binary, so this skips the
+      // keyword matching at nearly every position. Matching costs five passes
+      // over the stream, each rewinding on failure.
+      const byte = this.bytes.peek();
+      if (
+        byte !== CharCodes.s &&
+        byte !== CharCodes.e &&
+        byte !== CharCodes.CarriageReturn &&
+        byte !== CharCodes.Newline
+      ) {
+        this.bytes.next();
+        continue;
+      }
+
       if (this.matchKeyword(Keywords.stream)) {
         nestingLvl += 1;
       } else if (
