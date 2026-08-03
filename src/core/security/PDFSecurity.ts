@@ -1,5 +1,10 @@
 import CryptoJS from 'crypto-js';
 import PDFContext from '../PDFContext';
+import PDFHeader from '../document/PDFHeader';
+import PDFDict from '../objects/PDFDict';
+import PDFName from '../objects/PDFName';
+import PDFNumber from '../objects/PDFNumber';
+import { PDF20 } from '../crypto';
 
 type WordArray = CryptoJS.lib.WordArray;
 type RandomWordArrayGenerator = (bytes: number) => WordArray;
@@ -44,6 +49,16 @@ interface UserPermissions {
 export type EncryptFn = (buffer: Uint8Array) => Uint8Array;
 
 /**
+ * Cipher used to encrypt a document.
+ *
+ * `AES-256` is the default and the only one recommended by ISO 32000-2. The RC4
+ * variants are broken and are kept only to interoperate with viewers predating
+ * Acrobat 7; selecting one requires
+ * {@link SecurityOptions.allowWeakCryptography}.
+ */
+export type EncryptionAlgorithm = 'AES-256' | 'AES-128' | 'RC4-128' | 'RC4-40';
+
+/**
  * Interface options for security
  * @interface SecurityOptions
  */
@@ -65,11 +80,75 @@ export interface SecurityOptions {
    * @link {@link UserPermissions}
    */
   permissions?: UserPermissions;
+
+  /**
+   * Cipher to encrypt the document with. Defaults to `'AES-256'`.
+   *
+   * The document's own PDF version is never used to pick the cipher: it
+   * describes the syntax its producer used, not what the reader opening the
+   * encrypted file supports. The header is instead raised to the minimum
+   * version the chosen cipher requires, so the file stays self-consistent.
+   */
+  algorithm?: EncryptionAlgorithm;
+
+  /**
+   * Permits selecting a broken cipher (`'RC4-40'` or `'RC4-128'`). Without it,
+   * asking for RC4 throws. Only useful for viewers predating Acrobat 7 (2005).
+   */
+  allowWeakCryptography?: boolean;
 }
 
 type Algorithm = 1 | 2 | 4 | 5;
-type Revision = 2 | 3 | 4 | 5;
+type Revision = 2 | 3 | 4 | 5 | 6;
 type KeyBits = 40 | 128 | 256;
+
+interface AlgorithmProfile {
+  V: Algorithm;
+  R: Revision;
+  keyBits: KeyBits;
+  /**
+   * Lowest PDF version whose specification defines this handler, per ISO
+   * 32000-1 Table 20 and, for AES-256, Adobe Extension Level 8.
+   */
+  minimumVersion: [number, number];
+  weak: boolean;
+}
+
+const ALGORITHM_PROFILES: Record<EncryptionAlgorithm, AlgorithmProfile> = {
+  'AES-256': {
+    V: 5,
+    R: 6,
+    keyBits: 256,
+    minimumVersion: [1, 7],
+    weak: false,
+  },
+  'AES-128': {
+    V: 4,
+    R: 4,
+    keyBits: 128,
+    minimumVersion: [1, 6],
+    weak: false,
+  },
+  'RC4-128': {
+    V: 2,
+    R: 3,
+    keyBits: 128,
+    minimumVersion: [1, 4],
+    weak: true,
+  },
+  'RC4-40': {
+    V: 1,
+    R: 2,
+    keyBits: 40,
+    minimumVersion: [1, 1],
+    weak: true,
+  },
+};
+
+const DEFAULT_ALGORITHM: EncryptionAlgorithm = 'AES-256';
+
+/** Adobe extension level that introduced AES-256 with revision 6. */
+const AES256_EXTENSION_LEVEL = 8;
 
 type Encryption = {
   V: number;
@@ -101,6 +180,7 @@ class PDFSecurity {
   private encryption!: Encryption;
   private keyBits!: KeyBits;
   private encryptionKey!: WordArray;
+  private profile!: AlgorithmProfile;
 
   static create(context: PDFContext, options: SecurityOptions) {
     return new PDFSecurity(context, options);
@@ -121,29 +201,32 @@ class PDFSecurity {
   private initialize(options: SecurityOptions) {
     this.id = generateRandomFileId();
 
-    let v: Algorithm;
-    switch (this.context.header.getVersionString()) {
-      case '1.4':
-      case '1.5':
-        v = 2;
-        break;
-      case '1.6':
-      case '1.7':
-        v = 4;
-        break;
-      case '1.7ext3':
-        v = 5;
-        break;
-      default:
-        v = 1;
-        break;
+    const algorithm = options.algorithm ?? DEFAULT_ALGORITHM;
+    const profile = ALGORITHM_PROFILES[algorithm];
+
+    if (!profile) {
+      throw new Error(
+        `Unknown encryption algorithm '${algorithm}'. Expected one of ` +
+          `${Object.keys(ALGORITHM_PROFILES).join(', ')}.`,
+      );
     }
 
-    switch (v) {
+    if (profile.weak && !options.allowWeakCryptography) {
+      throw new Error(
+        `Refusing to encrypt with ${algorithm}: RC4 is broken and was removed ` +
+          "from ISO 32000-2. Use 'AES-256' (the default), or pass " +
+          'allowWeakCryptography: true if you must target a viewer released ' +
+          'before Acrobat 7.',
+      );
+    }
+
+    this.profile = profile;
+
+    switch (profile.V) {
       case 1:
       case 2:
       case 4:
-        this.encryption = this.initializeV1V2V4(v, options);
+        this.encryption = this.initializeV1V2V4(profile, options);
         break;
       case 5:
         this.encryption = this.initializeV5(options);
@@ -151,33 +234,91 @@ class PDFSecurity {
     }
   }
 
-  private initializeV1V2V4(v: Algorithm, options: SecurityOptions): Encryption {
+  /**
+   * Raises the header to the lowest version that defines the chosen handler, so
+   * the file never advertises a version older than the encryption it uses. The
+   * version is only ever raised, never lowered.
+   */
+  private raiseHeaderVersion() {
+    const [major, minor] = this.profile.minimumVersion;
+    const [currentMajor, currentMinor] = this.context.header
+      .getVersionString()
+      .split('.')
+      // A minor version may carry a suffix, as in the '1.7ext3' that older
+      // releases used to request AES-256.
+      .map((part) => parseInt(part, 10) || 0);
+
+    if (
+      currentMajor > major ||
+      (currentMajor === major && currentMinor >= minor)
+    ) {
+      return;
+    }
+
+    this.context.header = PDFHeader.forVersion(major, minor);
+  }
+
+  /**
+   * AES-256 is not part of PDF 1.7; it arrived with Adobe extension level 8,
+   * which a 1.7 file declares through the catalog's `/Extensions` dictionary
+   * (ISO 32000-1 §7.1, Annex E). Skipped for PDF 2.0 and later, where the
+   * handler is part of the base specification.
+   */
+  private declareExtensionLevel() {
+    if (this.profile.V !== 5) return;
+
+    const major = parseInt(this.context.header.getVersionString(), 10) || 0;
+    if (major >= 2) return;
+
+    const { Root } = this.context.trailerInfo;
+    if (!Root) return;
+
+    const catalog = this.context.lookupMaybe(Root, PDFDict);
+    if (!catalog) return;
+
+    const extensions =
+      catalog.lookupMaybe(PDFName.of('Extensions'), PDFDict) ??
+      this.context.obj({});
+
+    // Other developer prefixes describe unrelated extensions and are left alone;
+    // only ADBE numbers the levels the security handlers belong to.
+    const adbe =
+      extensions.lookupMaybe(PDFName.of('ADBE'), PDFDict) ??
+      this.context.obj({});
+    const declared =
+      adbe.lookupMaybe(PDFName.of('ExtensionLevel'), PDFNumber)?.asNumber() ??
+      0;
+
+    if (declared < AES256_EXTENSION_LEVEL) {
+      adbe.set(
+        PDFName.of('BaseVersion'),
+        PDFName.of(this.context.header.getVersionString()),
+      );
+      adbe.set(
+        PDFName.of('ExtensionLevel'),
+        PDFNumber.of(AES256_EXTENSION_LEVEL),
+      );
+    }
+
+    extensions.set(PDFName.of('ADBE'), adbe);
+    catalog.set(PDFName.of('Extensions'), extensions);
+  }
+
+  private initializeV1V2V4(
+    profile: AlgorithmProfile,
+    options: SecurityOptions,
+  ): Encryption {
     const encryption = {
       Filter: 'Standard',
     } as Encryption;
 
-    let r: Revision;
-    let permissions: number;
-
-    switch (v) {
-      case 1:
-        r = 2;
-        this.keyBits = 40;
-        permissions = getPermissionsR2(options.permissions);
-        break;
-      case 2:
-        r = 3;
-        this.keyBits = 128;
-        permissions = getPermissionsR3(options.permissions);
-        break;
-      case 4:
-        r = 4;
-        this.keyBits = 128;
-        permissions = getPermissionsR3(options.permissions);
-        break;
-      default:
-        throw new Error(`Unsupported algorithm '${v}'.`);
-    }
+    const v = profile.V;
+    const r = profile.R;
+    this.keyBits = profile.keyBits;
+    const permissions =
+      r === 2
+        ? getPermissionsR2(options.permissions)
+        : getPermissionsR3(options.permissions);
 
     const paddedUserPassword: WordArray = processPasswordR2R3R4(
       options.userPassword,
@@ -242,10 +383,10 @@ class PDFSecurity {
 
     this.keyBits = 256;
 
-    this.encryptionKey = getEncryptionKeyR5(generateRandomWordArray);
+    this.encryptionKey = getEncryptionKeyR6(generateRandomWordArray);
 
-    const processedUserPassword = processPasswordR5(options.userPassword);
-    const userPasswordEntry = getUserPasswordR5(
+    const processedUserPassword = processPasswordR6(options.userPassword);
+    const userPasswordEntry = getUserPasswordR6(
       processedUserPassword,
       generateRandomWordArray,
     );
@@ -253,16 +394,16 @@ class PDFSecurity {
       userPasswordEntry.words.slice(10, 12),
       8,
     );
-    const userEncryptionKeyEntry = getUserEncryptionKeyR5(
+    const userEncryptionKeyEntry = getUserEncryptionKeyR6(
       processedUserPassword,
       userKeySalt,
       this.encryptionKey,
     );
 
     const processedOwnerPassword = options.ownerPassword
-      ? processPasswordR5(options.ownerPassword)
+      ? processPasswordR6(options.ownerPassword)
       : processedUserPassword;
-    const ownerPasswordEntry = getOwnerPasswordR5(
+    const ownerPasswordEntry = getOwnerPasswordR6(
       processedOwnerPassword,
       userPasswordEntry,
       generateRandomWordArray,
@@ -271,7 +412,7 @@ class PDFSecurity {
       ownerPasswordEntry.words.slice(10, 12),
       8,
     );
-    const ownerEncryptionKeyEntry = getOwnerEncryptionKeyR5(
+    const ownerEncryptionKeyEntry = getOwnerEncryptionKeyR6(
       processedOwnerPassword,
       ownerKeySalt,
       userPasswordEntry,
@@ -279,7 +420,7 @@ class PDFSecurity {
     );
 
     const permissions = getPermissionsR3(options.permissions);
-    const permissionsEntry = getEncryptedPermissionsR5(
+    const permissionsEntry = getEncryptedPermissionsR6(
       permissions,
       this.encryptionKey,
       generateRandomWordArray,
@@ -297,7 +438,7 @@ class PDFSecurity {
     encryption.StmF = 'StdCF';
     encryption.StrF = 'StdCF';
 
-    encryption.R = 5;
+    encryption.R = 6;
 
     encryption.O = wordArrayToBuffer(ownerPasswordEntry);
     encryption.OE = wordArrayToBuffer(ownerEncryptionKeyEntry);
@@ -375,6 +516,9 @@ class PDFSecurity {
   }
 
   encrypt() {
+    this.raiseHeaderVersion();
+    this.declareExtensionLevel();
+
     const ID = this.context.obj([this.id, this.id]);
     this.context.trailerInfo.ID = ID;
 
@@ -532,61 +676,53 @@ const getEncryptionKeyR2R3R4 = (
   return key;
 };
 
-const getUserPasswordR5 = (
-  processedUserPassword: WordArray,
-  randomWordArrayGenerator: RandomWordArrayGenerator,
-) => {
-  const validationSalt = randomWordArrayGenerator(8);
-  const keySalt = randomWordArrayGenerator(8);
-  return CryptoJS.SHA256(processedUserPassword.clone().concat(validationSalt))
-    .concat(validationSalt)
-    .concat(keySalt);
-};
+const EMPTY_WORD_ARRAY = () => CryptoJS.lib.WordArray.create([], 0);
 
-const getUserEncryptionKeyR5 = (
-  processedUserPassword: WordArray,
-  userKeySalt: WordArray,
-  encryptionKey: WordArray,
-) => {
-  const key = CryptoJS.SHA256(
-    processedUserPassword.clone().concat(userKeySalt),
+const pdf20 = new PDF20();
+
+/**
+ * ISO 32000-2 §7.6.4.3.4, Algorithm 2.B: the iterated SHA-256/384/512 hash that
+ * distinguishes revision 6 from the deprecated revision 5, whose single SHA-256
+ * made password guessing cheap. Delegates to the implementation the decrypting
+ * side already uses, so both directions cannot drift apart.
+ */
+const hashR6 = (
+  password: WordArray,
+  input: WordArray,
+  udata: WordArray,
+): WordArray =>
+  bufferToWordArray(
+    pdf20.hash(
+      wordArrayToBuffer(password),
+      wordArrayToBuffer(input),
+      wordArrayToBuffer(udata),
+    ),
   );
-  const options = {
-    mode: CryptoJS.mode.CBC,
-    padding: CryptoJS.pad.NoPadding,
-    iv: CryptoJS.lib.WordArray.create(null as unknown as undefined, 16),
-  };
-  return CryptoJS.AES.encrypt(encryptionKey, key, options).ciphertext;
-};
 
-const getOwnerPasswordR5 = (
-  processedOwnerPassword: WordArray,
-  userPasswordEntry: WordArray,
+const getUserPasswordR6 = (
+  processedUserPassword: WordArray,
   randomWordArrayGenerator: RandomWordArrayGenerator,
 ) => {
   const validationSalt = randomWordArrayGenerator(8);
   const keySalt = randomWordArrayGenerator(8);
-  return CryptoJS.SHA256(
-    processedOwnerPassword
-      .clone()
-      .concat(validationSalt)
-      .concat(userPasswordEntry),
+  return hashR6(
+    processedUserPassword,
+    processedUserPassword.clone().concat(validationSalt),
+    EMPTY_WORD_ARRAY(),
   )
     .concat(validationSalt)
     .concat(keySalt);
 };
 
-const getOwnerEncryptionKeyR5 = (
-  processedOwnerPassword: WordArray,
-  ownerKeySalt: WordArray,
-  userPasswordEntry: WordArray,
+const getUserEncryptionKeyR6 = (
+  processedUserPassword: WordArray,
+  userKeySalt: WordArray,
   encryptionKey: WordArray,
 ) => {
-  const key = CryptoJS.SHA256(
-    processedOwnerPassword
-      .clone()
-      .concat(ownerKeySalt)
-      .concat(userPasswordEntry),
+  const key = hashR6(
+    processedUserPassword,
+    processedUserPassword.clone().concat(userKeySalt),
+    EMPTY_WORD_ARRAY(),
   );
   const options = {
     mode: CryptoJS.mode.CBC,
@@ -596,11 +732,52 @@ const getOwnerEncryptionKeyR5 = (
   return CryptoJS.AES.encrypt(encryptionKey, key, options).ciphertext;
 };
 
-const getEncryptionKeyR5 = (
+const getOwnerPasswordR6 = (
+  processedOwnerPassword: WordArray,
+  userPasswordEntry: WordArray,
+  randomWordArrayGenerator: RandomWordArrayGenerator,
+) => {
+  const validationSalt = randomWordArrayGenerator(8);
+  const keySalt = randomWordArrayGenerator(8);
+  return hashR6(
+    processedOwnerPassword,
+    processedOwnerPassword
+      .clone()
+      .concat(validationSalt)
+      .concat(userPasswordEntry),
+    userPasswordEntry,
+  )
+    .concat(validationSalt)
+    .concat(keySalt);
+};
+
+const getOwnerEncryptionKeyR6 = (
+  processedOwnerPassword: WordArray,
+  ownerKeySalt: WordArray,
+  userPasswordEntry: WordArray,
+  encryptionKey: WordArray,
+) => {
+  const key = hashR6(
+    processedOwnerPassword,
+    processedOwnerPassword
+      .clone()
+      .concat(ownerKeySalt)
+      .concat(userPasswordEntry),
+    userPasswordEntry,
+  );
+  const options = {
+    mode: CryptoJS.mode.CBC,
+    padding: CryptoJS.pad.NoPadding,
+    iv: CryptoJS.lib.WordArray.create(null as unknown as undefined, 16),
+  };
+  return CryptoJS.AES.encrypt(encryptionKey, key, options).ciphertext;
+};
+
+const getEncryptionKeyR6 = (
   randomWordArrayGenerator: RandomWordArrayGenerator,
 ) => randomWordArrayGenerator(32);
 
-const getEncryptedPermissionsR5 = (
+const getEncryptedPermissionsR6 = (
   permissions: number,
   encryptionKey: WordArray,
   randomWordArrayGenerator: RandomWordArrayGenerator,
@@ -635,16 +812,26 @@ const processPasswordR2R3R4 = (password = '') => {
   return CryptoJS.lib.WordArray.create(out as unknown as number[]);
 };
 
-const processPasswordR5 = (password = '') => {
-  // NOTE: Removed this line to eliminate need for the saslprep dependency.
-  // Probably worth investigating the cases that would be impacted by this.
-  // password = unescape(encodeURIComponent(saslprep(password)));
+const processPasswordR6 = (password = '') => {
+  // NOTE: Removed the saslprep normalisation to eliminate need for the saslprep
+  // dependency. Probably worth investigating the cases that would be impacted.
 
-  const length = Math.min(127, password.length);
+  // ISO 32000-2 §7.6.4.3.3: a revision 6 password is the UTF-8 encoding of the
+  // (normalised) string, truncated to 127 bytes. CipherTransformFactory applies
+  // the same conversion when reading, so both sides agree on non-ASCII input.
+  let encoded: string;
+  try {
+    encoded = unescape(encodeURIComponent(password));
+  } catch {
+    // encodeURIComponent rejects lone surrogates; fall back to the raw units.
+    encoded = password;
+  }
+
+  const length = Math.min(127, encoded.length);
   const out = new Uint8Array(length);
 
   for (let i = 0; i < length; i++) {
-    out[i] = password.charCodeAt(i);
+    out[i] = encoded.charCodeAt(i) & 0xff;
   }
 
   return CryptoJS.lib.WordArray.create(out as unknown as number[]);
@@ -655,6 +842,9 @@ const lsbFirstWord = (data: number): number =>
   ((data & 0xff00) << 8) |
   ((data >> 8) & 0xff00) |
   ((data >> 24) & 0xff);
+
+const bufferToWordArray = (buffer: Uint8Array): WordArray =>
+  CryptoJS.lib.WordArray.create(buffer as unknown as number[]);
 
 const wordArrayToBuffer = (wordArray: WordArray): Uint8Array => {
   const byteArray = [];

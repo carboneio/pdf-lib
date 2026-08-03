@@ -2037,6 +2037,50 @@ const doc = await PDFDocument.load(content, { password: '' })
 
 If the password is wrong, `PDFDocument.load` throws an error.
 
+To encrypt a document, call `encrypt()` before saving:
+
+```js
+const doc = await PDFDocument.load(content)
+doc.encrypt({ userPassword: 'open me', ownerPassword: 'change me' })
+const bytes = await doc.save()
+```
+
+This produces AES-256 encryption (`/V 5`, `/R 6`), the only algorithm ISO 32000-2
+still defines. The document's own PDF version does not influence the cipher: it
+describes the syntax its producer used, not what the reader opening the encrypted
+file supports. Instead, the header is raised to the minimum version the cipher
+requires (and, for AES-256, the catalog declares Adobe extension level 8), so an
+old document encrypts just as strongly as a recent one.
+
+Pass `algorithm` to target an older viewer. `'AES-128'` (`/V 4`, `/R 4`) covers
+everything from Acrobat 7 onwards. The RC4 variants are broken and were removed
+from ISO 32000-2, so requesting one throws unless you also pass
+`allowWeakCryptography`:
+
+```js
+doc.encrypt({ userPassword: 'open me', algorithm: 'AES-128' })
+
+// Only for viewers predating Acrobat 7 (2005):
+doc.encrypt({
+  userPassword: 'open me',
+  algorithm: 'RC4-128',
+  allowWeakCryptography: true,
+})
+```
+
+You can also restrict what the user password grants:
+
+```js
+doc.encrypt({
+  userPassword: 'open me',
+  ownerPassword: 'change me',
+  permissions: { printing: 'highResolution', modifying: false, copying: false },
+})
+```
+
+Note that permissions are advisory: they are recorded in the document, and it is
+up to the viewer to honour them.
+
 ## Contributing
 
 We welcome contributions from the open source community! If you are interested in contributing to `pdf-lib`, please take a look at the [CONTRIBUTING.md](docs/CONTRIBUTING.md) file. It contains information to help you get `pdf-lib` setup and running on your machine. (We try to make this as simple and fast as possible! :rocket:)
