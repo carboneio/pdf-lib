@@ -111,6 +111,23 @@ describe('PDFCrossRefStream', () => {
     );
   });
 
+  // Entries must end up sorted by object number whatever order they arrive in,
+  // since the `/Index` subsections are derived from the gaps between them.
+  it('sorts entries by object number regardless of the order added', () => {
+    const ascending = PDFCrossRefStream.create(dict, false);
+    ascending.addUncompressedEntry(PDFRef.of(3), 300);
+    ascending.addCompressedEntry(PDFRef.of(5), PDFRef.of(10), 0);
+    ascending.addUncompressedEntry(PDFRef.of(9), 600);
+
+    const shuffled = PDFCrossRefStream.create(dict, false);
+    shuffled.addUncompressedEntry(PDFRef.of(9), 600);
+    shuffled.addUncompressedEntry(PDFRef.of(3), 300);
+    shuffled.addCompressedEntry(PDFRef.of(5), PDFRef.of(10), 0);
+
+    expect(String(shuffled)).toBe(String(ascending));
+    expect(String(shuffled)).toContain('/Index [ 0 1 3 1 5 1 9 1 ]');
+  });
+
   it('can be serialized when encoded', () => {
     const stream = PDFCrossRefStream.create(dict, true);
     stream.addUncompressedEntry(PDFRef.of(2), 300);
