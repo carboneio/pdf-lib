@@ -16,6 +16,7 @@
 
 import { arrayAsString, isArrayEqual } from '../utils/arrays';
 import { stringAsByteArray } from '../utils/strings';
+import { getNodeCrypto } from './nodeCrypto';
 import PDFBool from './objects/PDFBool';
 import PDFDict from './objects/PDFDict';
 import PDFName from './objects/PDFName';
@@ -1333,7 +1334,32 @@ class PDF20 {
     userBytes: Uint8Array,
   ) {
     // This refers to Algorithm 2.B as defined in ISO 32000-2.
-    let k = calculateSHA256(input, 0, input.length).subarray(0, 32);
+    //
+    // At least 64 rounds of hashing and encrypting ~2 KB each is slow enough in
+    // JavaScript to be noticeable on every save and load of an encrypted
+    // document, so hand the primitives to Node when it can provide them.
+    const native = getNodeCrypto();
+
+    const encryptBlock = native
+      ? (key: Uint8Array, iv: Uint8Array, data: Uint8Array) =>
+          native.aes128CbcNoPadding(key, iv, data)
+      : (key: Uint8Array, iv: Uint8Array, data: Uint8Array) =>
+          new AES128Cipher(key).encrypt(data, iv);
+
+    // Indexed by the remainder modulo 3 computed at the end of each round.
+    const digests: ((data: Uint8Array) => Uint8Array)[] = native
+      ? [
+          (data) => native.hash('sha256', data),
+          (data) => native.hash('sha384', data),
+          (data) => native.hash('sha512', data),
+        ]
+      : [
+          (data) => calculateSHA256(data, 0, data.length),
+          (data) => calculateSHA384(data, 0, data.length),
+          (data) => calculateSHA512(data, 0, data.length),
+        ];
+
+    let k = digests[0](input).subarray(0, 32);
     let e: Uint8Array = new Uint8Array([0]);
     let i = 0;
     while (i < 64 || e[e.length - 1] > i - 32) {
@@ -1352,8 +1378,7 @@ class PDF20 {
       }
       // AES128 CBC NO PADDING with first 16 bytes of k as the key
       // and the second 16 as the iv.
-      const cipher = new AES128Cipher(k.subarray(0, 16));
-      e = cipher.encrypt(k1, k.subarray(16, 32));
+      e = encryptBlock(k.subarray(0, 16), k.subarray(16, 32), k1);
       // Now we have to take the first 16 bytes of an unsigned big endian
       // integer and compute the remainder modulo 3. That is a fairly large
       // number and JavaScript isn't going to handle that well.
@@ -1361,13 +1386,7 @@ class PDF20 {
       // the powers of 256 are === 1 modulo 3 and finally the number modulo 3
       // is equal to the remainder modulo 3 of the sum of the e_n.
       const remainder = e.slice(0, 16).reduce((a, b) => a + b, 0) % 3;
-      if (remainder === 0) {
-        k = calculateSHA256(e, 0, e.length);
-      } else if (remainder === 1) {
-        k = calculateSHA384(e, 0, e.length);
-      } else if (remainder === 2) {
-        k = calculateSHA512(e, 0, e.length);
-      }
+      k = digests[remainder](e);
       i++;
     }
     return k.subarray(0, 32);

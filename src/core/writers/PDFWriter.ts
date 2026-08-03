@@ -59,59 +59,64 @@ class PDFWriter {
   }
 
   /**
-   * If PDF has an XRef Stream, then the last object will be probably be skipped on saving.
-   * If that's the case, this property will have that object number, and the PDF /Size can
-   * be corrected, to be accurate.
+   * Highest object number actually written. Skipped objects leave gaps, so the
+   * context's largest object number can overstate what the file contains.
    */
-  protected _largestSkippedObjectNum: number = 0;
+  protected _largestSavedObjectNum: number = 0;
 
   /**
-   * Used to check wheter an object should be saved or not, preserves the object number of the
-   * last XRef Stream object, if there is one.
-   */
-  protected _lastXRefObjectNumber: number = 0;
-  /**
-   * For incremental saves, defers the decision to the snapshot.
-   * For full saves, checks that the object is not the last XRef stream object.
-   * @param {boolean} incremental If making an incremental save, or a full save of the PDF
-   * @param {number} objNum Object number
-   * @param {[PDFRef, PDFObject][]} objects List of objects that form the PDF
-   * @returns {boolean} whether the object should be saved or not
+   * Whether an indirect object is written out.
+   *
+   * An incremental save keeps the original bytes and only appends, so the
+   * snapshot decides. A full save rebuilds the whole file, which makes the parts
+   * it regenerates from scratch stale; see [[isStaleCopiedObject]].
+   *
+   * @param incremental If making an incremental save, or a full save of the PDF
+   * @param ref Reference the object is registered under
+   * @param object The object itself
+   * @returns whether the object should be saved or not
    */
   protected shouldSave(
     incremental: boolean,
-    objNum: number,
-    objects: [PDFRef, PDFObject][],
+    ref: PDFRef,
+    object: PDFObject,
   ): boolean {
-    let should = true;
-    if (incremental) {
-      should = this.snapshot.shouldSave(objNum);
-    } else {
-      // only the last XRef Stream will be regenerated on save
-      if (!this._lastXRefObjectNumber) {
-        // if no XRef Stream, then nothing should be skipped
-        this._lastXRefObjectNumber = this.context.largestObjectNumber + 1;
-        const checkWatermark = this._lastXRefObjectNumber - 10; // max number of objects in the final part of the PDF to check
-        // search the last XRef Stream, if there is one, objects are expected to be in object number order
-        for (let idx = objects.length - 1; idx > 0; idx--) {
-          // if not in last 'rangeToCheck' objects, there is none that should be skipped, most probably a linearized PDF, or without XRef Streams
-          if (objects[idx][0].objectNumber < checkWatermark) break;
-          const object = objects[idx][1];
-          if (
-            object instanceof PDFRawStream &&
-            object.dict.lookup(PDFName.of('Type')) === PDFName.of('XRef')
-          ) {
-            this._lastXRefObjectNumber = objects[idx][0].objectNumber;
-            break;
-          }
-        }
-      }
-      should = objNum !== this._lastXRefObjectNumber;
+    const should = incremental
+      ? this.snapshot.shouldSave(ref.objectNumber)
+      : !this.isStaleCopiedObject(object);
+
+    if (should && this._largestSavedObjectNum < ref.objectNumber) {
+      this._largestSavedObjectNum = ref.objectNumber;
     }
-    if (!should && this._largestSkippedObjectNum < objNum) {
-      this._largestSkippedObjectNum = objNum;
-    }
+
     return should;
+  }
+
+  /**
+   * Whether `object` was parsed from the source file but is regenerated from
+   * scratch by a full save, which leaves the parsed copy stale.
+   *
+   * Neither kind is reachable from the object graph — a reader reaches them only
+   * through `startxref` and `/Prev`, which a full save rewrites — so writing them
+   * back serves no purpose, and does harm:
+   *
+   * - A cross-reference stream holds byte offsets into the *source* file, which
+   *   mean nothing once objects move. Worse, cross-reference streams are written
+   *   in the clear, so keeping one copies the source's plaintext (its `/ID`, and
+   *   its whole inflatable payload) into a document that is being encrypted.
+   * - An object stream container's contents were already extracted and
+   *   registered individually by PDFObjectStreamParser. Re-serialising the
+   *   container duplicates them, and on the next load the stale copies overwrite
+   *   the current ones (last assignment wins), silently discarding any change
+   *   made in between.
+   *
+   * Only copies from the source qualify: a full save regenerates these as a
+   * PDFCrossRefStream or a PDFObjectStream, never as a PDFRawStream.
+   */
+  protected isStaleCopiedObject(object: PDFObject): boolean {
+    if (!(object instanceof PDFRawStream)) return false;
+    const type = object.dict.lookup(PDFName.of('Type'));
+    return type === PDFName.of('XRef') || type === PDFName.of('ObjStm');
   }
 
   async serializeToBuffer() {
@@ -131,12 +136,7 @@ class PDFWriter {
     for (let idx = 0, len = indirectObjects.length; idx < len; idx++) {
       const [ref, object] = indirectObjects[idx];
 
-      if (!this.shouldSave(incremental, ref.objectNumber, indirectObjects)) {
-        continue;
-      }
-      if (!incremental && this.shouldSkipCopiedObjectStream(object)) {
-        continue;
-      }
+      if (!this.shouldSave(incremental, ref, object)) continue;
 
       const objectNumber = String(ref.objectNumber);
       offset += copyStringIntoBuffer(objectNumber, buffer, offset);
@@ -194,17 +194,13 @@ class PDFWriter {
   }
 
   protected createTrailerDict(prevStartXRef?: number): PDFDict {
-    /**
-     * if last object (XRef Stream) is not in the output, then size is one less.
-     * An XRef Stream object should always be the largest object number in PDF
-     */
-    const size =
-      this.context.largestObjectNumber +
-      (this._largestSkippedObjectNum === this.context.largestObjectNumber
-        ? 0
-        : 1);
+    // /Size is one greater than the highest object number in the file. Objects
+    // dropped as stale leave the context's largest object number higher than
+    // anything actually written, so count what was written instead.
+    const highestObjectNumber =
+      this._largestSavedObjectNum || this.context.largestObjectNumber;
     return this.context.obj({
-      Size: size,
+      Size: highestObjectNumber + 1,
       Root: this.context.trailerInfo.Root,
       Encrypt: this.context.trailerInfo.Encrypt,
       Info: this.context.trailerInfo.Info,
@@ -216,8 +212,7 @@ class PDFWriter {
   protected async computeBufferSize(
     incremental: boolean,
   ): Promise<SerializationInfo> {
-    this._largestSkippedObjectNum = 0;
-    this._lastXRefObjectNumber = 0;
+    this._largestSavedObjectNum = 0;
     const header = this.context.header;
 
     let size = this.snapshot.pdfSize;
@@ -235,15 +230,7 @@ class PDFWriter {
     for (let idx = 0, len = indirectObjects.length; idx < len; idx++) {
       const indirectObject = indirectObjects[idx];
       const [ref, object] = indirectObject;
-      if (!this.shouldSave(incremental, ref.objectNumber, indirectObjects)) {
-        continue;
-      }
-      // Source ObjStm containers must not be re-serialised on full saves (see
-      // PDFStreamWriter for a detailed explanation). For incremental saves the
-      // snapshot already excludes them, so this guard is a no-op there.
-      if (!incremental && this.shouldSkipCopiedObjectStream(object)) {
-        continue;
-      }
+      if (!this.shouldSave(incremental, ref, object)) continue;
       // Swap in the encrypted object so its size and bytes stay consistent.
       if (security) indirectObject[1] = this.encrypt(ref, object, security);
       xref.addEntry(ref, size);
@@ -354,13 +341,6 @@ class PDFWriter {
         }
       }
     }
-  }
-
-  protected shouldSkipCopiedObjectStream(object: PDFObject): boolean {
-    return (
-      object instanceof PDFRawStream &&
-      object.dict.lookup(PDFName.of('Type')) === PDFName.of('ObjStm')
-    );
   }
 
   protected shouldWaitForTick = (n: number) => {

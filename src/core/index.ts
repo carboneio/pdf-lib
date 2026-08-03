@@ -65,6 +65,7 @@ export { default as PDFXRefStreamParser } from './parser/PDFXRefStreamParser';
 
 export {
   default as PDFSecurity,
+  EncryptionAlgorithm,
   SecurityOptions,
 } from './security/PDFSecurity';
 

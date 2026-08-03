@@ -19,7 +19,7 @@ import {
   AFRelationship,
 } from '../../src/index';
 import { PDFAttachment } from '../../src/api/PDFDocument';
-import { PDFHeader } from '../../src/core';
+import { PDFHeader, PDFRawStream, SecurityOptions } from '../../src/core';
 
 const examplePngImageBase64 =
   'iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAABhGlDQ1BJQ0MgcHJvZmlsZQAAKJF9kT1Iw0AcxV9TxaoVBzuIdMhQnSyIijhKFYtgobQVWnUwufQLmjQkKS6OgmvBwY/FqoOLs64OroIg+AHi5uak6CIl/i8ptIjx4Lgf7+497t4BQqPCVLNrAlA1y0jFY2I2tyr2vKIfAgLoRVhipp5IL2bgOb7u4ePrXZRneZ/7cwwoeZMBPpF4jumGRbxBPLNp6Zz3iUOsJCnE58TjBl2Q+JHrsstvnIsOCzwzZGRS88QhYrHYwXIHs5KhEk8TRxRVo3wh67LCeYuzWqmx1j35C4N5bSXNdZphxLGEBJIQIaOGMiqwEKVVI8VEivZjHv4Rx58kl0yuMhg5FlCFCsnxg//B727NwtSkmxSMAd0vtv0xCvTsAs26bX8f23bzBPA/A1da219tALOfpNfbWuQIGNwGLq7bmrwHXO4Aw0+6ZEiO5KcpFArA+xl9Uw4YugX61tzeWvs4fQAy1NXyDXBwCIwVKXvd492Bzt7+PdPq7wcdn3KFLu4iBAAAAAZiS0dEAP8A/wD/oL2nkwAAAAlwSFlzAAALEwAACxMBAJqcGAAAAlFJREFUeNrt289r02AYB/Dvk6Sl4EDKpllTlFKsnUdBHXgUBEHwqHj2IJ72B0zwKHhxJ08i/gDxX/AiRfSkBxELXTcVxTa2s2xTsHNN8ngQbQL70RZqG/Z9b29JnvflkydP37whghG3ZaegoxzfwB5vBCAAAQhAAAIQgAAEIAABCEAAAhCAAAQgwB5rstWPtnP0LqBX/vZNyLF6vVrpN/hucewhb4g+B2AyAwiwY7NGOXijviS9vBeYh6CEP4edBLDADCAAAQhAAAIQgAAEIAABCDAUAFF/GIN1DM+PBYCo/ohMXDQ1WPjoeUZH1mMBEEh0oqLGvsHCy0S4NzWVWotJBogbvZB+brDwQT7UWSmXy5sxyQB9HQEROdVv4HQ+vx+QmS4iXsWmCK7Usu8AhOqAXMzlcn3VgWTbugQgEYrxMkZ/gyUPgnuhe2C6/Stxvdeg2ezMJERvhOuoZ+JBrNYBRuDdBtDuXkDM25nCHLbZSv9X6A4VHU+DpwCcbvbjcetLtTaOANtuirrux08HM0euisjDEMKC7RQuq+C+pVJqpzx3NZ3+eeBza9I0rWJgyHnxg2sAJrqnaHUzFcyN60Jox13hprv8aNopZBS4GcqWWVHM+lAkN0zY7ncgkYBukRoKLPpiXVj9UFkfV4Bdl8Jf60u3IMZZAG/6iLuhkDvaSZ74VqtUx3kp3NN7gUZt8RmA43a2eEY1OCfQ04AcBpAGkAKwpkBLIG8BfQE/eNJsvG/G4VlARj0BfjDBx2ECEIAABCAAAQhAAAIQgAAE+P/tN8YvpvbTDBOlAAAAAElFTkSuQmCC';
@@ -56,6 +56,23 @@ const simpleStreamsPdfBytes = fs.readFileSync('assets/pdfs/simple_streams.pdf');
 const v15PdfBytes = fs.readFileSync('assets/pdfs/v15xref.pdf');
 const v14PdfBytes = fs.readFileSync('assets/pdfs/bixby_guide.pdf');
 const v13PdfBytes = normalPdfBytes;
+
+/**
+ * `PDFHexString.fromText` writes UTF-16BE as ASCII hex digits, so a plaintext
+ * leak shows up as those hex digits rather than as raw bytes.
+ */
+const containsPlaintext = (bytes: Uint8Array, text: string) => {
+  const utf16le = Buffer.from(text, 'utf16le');
+  const utf16be = [0xfe, 0xff];
+  for (let idx = 0; idx < utf16le.length; idx += 2) {
+    utf16be.push(utf16le[idx + 1], utf16le[idx]);
+  }
+  const file = Buffer.from(bytes).toString('latin1').toUpperCase();
+  return (
+    file.includes(text.toUpperCase()) ||
+    file.includes(Buffer.from(utf16be).toString('hex').toUpperCase())
+  );
+};
 
 describe('PDFDocument', () => {
   describe('load() method', () => {
@@ -551,23 +568,6 @@ describe('PDFDocument', () => {
       expect(loaded.getSubject()).toBe(subject);
     });
 
-    /**
-     * `PDFHexString.fromText` writes UTF-16BE as ASCII hex digits, so a
-     * plaintext leak shows up as those hex digits rather than as raw bytes.
-     */
-    const containsPlaintext = (bytes: Uint8Array, text: string) => {
-      const utf16le = Buffer.from(text, 'utf16le');
-      const utf16be = [0xfe, 0xff];
-      for (let idx = 0; idx < utf16le.length; idx += 2) {
-        utf16be.push(utf16le[idx + 1], utf16le[idx]);
-      }
-      const file = Buffer.from(bytes).toString('latin1').toUpperCase();
-      return (
-        file.includes(text.toUpperCase()) ||
-        file.includes(Buffer.from(utf16be).toString('hex').toUpperCase())
-      );
-    };
-
     it('encrypts strings that are themselves indirect objects', async () => {
       const secret = 'Indirect String Secret';
       const pdfDoc = await PDFDocument.create();
@@ -687,6 +687,324 @@ describe('PDFDocument', () => {
       const second = fileIds.lookup(1, PDFHexString).asBytes();
       expect(first).toHaveLength(16);
       expect(Array.from(second)).toEqual(Array.from(first));
+    });
+  });
+
+  /**
+   * A full save regenerates the cross-reference section, so the one parsed from
+   * the source file is stale. Writing it back used to leak, verbatim, the
+   * plaintext of a document being encrypted, because cross-reference streams are
+   * deliberately written in the clear.
+   */
+  describe('stale cross-reference streams', () => {
+    const marker = 'STALE-XREF-PLAINTEXT-MARKER';
+
+    /**
+     * Builds a document holding a cross-reference stream the way the parser would
+     * leave one, followed by further objects so that it is not the last one. A
+     * linearized file puts its first-page cross-reference stream near the front,
+     * which is the case that used to slip through the writer's search of only the
+     * last few object numbers.
+     */
+    const docWithStaleXrefStream = async () => {
+      const pdfDoc = await PDFDocument.create();
+
+      const dict = pdfDoc.context.obj({ Type: 'XRef', Size: 4, W: [1, 2, 1] });
+      dict.set(PDFName.of('TestMarker'), PDFHexString.fromText(marker));
+      const ref = pdfDoc.context.register(
+        PDFRawStream.of(dict, new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8])),
+      );
+
+      // Registered after the page so later objects outrank it.
+      pdfDoc.addPage();
+
+      expect(ref.objectNumber).toBeLessThan(pdfDoc.context.largestObjectNumber);
+      return { pdfDoc, ref };
+    };
+
+    it.each([false, true])(
+      'drops a stale cross-reference stream (useObjectStreams: %s)',
+      async (useObjectStreams) => {
+        const { pdfDoc, ref } = await docWithStaleXrefStream();
+
+        const bytes = await pdfDoc.save({ useObjectStreams });
+        const file = Buffer.from(bytes).toString('latin1');
+
+        expect(file).not.toContain(`${ref.objectNumber} 0 obj`);
+        expect(containsPlaintext(bytes, marker)).toBe(false);
+
+        // The file must remain loadable, which it would not be if the xref
+        // pointed at an object that was skipped.
+        const loaded = await PDFDocument.load(bytes, { updateMetadata: false });
+        expect(loaded.getPageCount()).toBe(1);
+      },
+    );
+
+    it('does not leak the stale stream when the document is encrypted', async () => {
+      const { pdfDoc } = await docWithStaleXrefStream();
+      pdfDoc.encrypt({ userPassword: 'pw', ownerPassword: 'pw' });
+
+      const bytes = await pdfDoc.save({ useObjectStreams: false });
+
+      expect(containsPlaintext(bytes, marker)).toBe(false);
+
+      const loaded = await PDFDocument.load(bytes, {
+        password: 'pw',
+        updateMetadata: false,
+      });
+      expect(loaded.getPageCount()).toBe(1);
+    });
+
+    it('keeps the cross-reference stream that the save itself generates', async () => {
+      const pdfDoc = await PDFDocument.create();
+      pdfDoc.addPage();
+
+      const bytes = await pdfDoc.save({ useObjectStreams: true });
+
+      // Dropping stale copies must not also drop the live one, which is a
+      // PDFCrossRefStream rather than a parsed PDFRawStream.
+      expect(Buffer.from(bytes).toString('latin1')).toContain('/Type /XRef');
+
+      const loaded = await PDFDocument.load(bytes, { updateMetadata: false });
+      expect(loaded.getPageCount()).toBe(1);
+    });
+
+    it('reports a /Size that covers only the objects written', async () => {
+      const { pdfDoc } = await docWithStaleXrefStream();
+
+      const bytes = await pdfDoc.save({ useObjectStreams: false });
+      const file = Buffer.from(bytes).toString('latin1');
+
+      // /Size is one greater than the highest object number in the file, so it
+      // must follow what was actually written, not what the context held.
+      const size = Number(/\/Size (\d+)/.exec(file.slice(-400))![1]);
+      let highest = 0;
+      const objects = /(?:^|\n)(\d+) \d+ obj/g;
+      let match: RegExpExecArray | null;
+      while ((match = objects.exec(file))) {
+        highest = Math.max(highest, Number(match[1]));
+      }
+      expect(size).toBe(highest + 1);
+    });
+  });
+
+  describe('encrypt() algorithm selection', () => {
+    const password = 'test-password';
+
+    const encryptDict = (pdfDoc: PDFDocument) =>
+      pdfDoc.context.lookup(pdfDoc.context.trailerInfo.Encrypt, PDFDict);
+
+    const numberEntry = (pdfDoc: PDFDocument, key: string) =>
+      encryptDict(pdfDoc).lookup(PDFName.of(key), PDFNumber).asNumber();
+
+    const buildDoc = async (version?: [number, number]) => {
+      const pdfDoc = await PDFDocument.create();
+      pdfDoc.addPage();
+      if (version) {
+        pdfDoc.context.header = PDFHeader.forVersion(version[0], version[1]);
+      }
+      return pdfDoc;
+    };
+
+    it('defaults to AES-256 with revision 6', async () => {
+      const pdfDoc = await buildDoc();
+      pdfDoc.encrypt({ userPassword: password, ownerPassword: password });
+
+      expect(numberEntry(pdfDoc, 'V')).toBe(5);
+      expect(numberEntry(pdfDoc, 'R')).toBe(6);
+      expect(numberEntry(pdfDoc, 'Length')).toBe(256);
+
+      const cf = encryptDict(pdfDoc).lookup(PDFName.of('CF'), PDFDict);
+      const stdCf = cf.lookup(PDFName.of('StdCF'), PDFDict);
+      expect(stdCf.lookup(PDFName.of('CFM'))).toBe(PDFName.of('AESV3'));
+    });
+
+    it.each([
+      ['AES-256', 5, 6],
+      ['AES-128', 4, 4],
+    ] as [SecurityOptions['algorithm'], number, number][])(
+      'selects %s independently of the document version',
+      async (algorithm, V, R) => {
+        const pdfDoc = await buildDoc([1, 3]);
+        pdfDoc.encrypt({
+          userPassword: password,
+          ownerPassword: password,
+          algorithm,
+        });
+
+        expect(numberEntry(pdfDoc, 'V')).toBe(V);
+        expect(numberEntry(pdfDoc, 'R')).toBe(R);
+      },
+    );
+
+    it.each([
+      ['AES-256', '1.7'],
+      ['AES-128', '1.6'],
+    ] as [SecurityOptions['algorithm'], string][])(
+      'raises the header of an old document to the minimum %s requires',
+      async (algorithm, expected) => {
+        const pdfDoc = await buildDoc([1, 3]);
+        pdfDoc.encrypt({
+          userPassword: password,
+          ownerPassword: password,
+          algorithm,
+        });
+
+        expect(pdfDoc.context.header.getVersionString()).toBe(expected);
+      },
+    );
+
+    it('never lowers the header of a newer document', async () => {
+      const pdfDoc = await buildDoc([2, 0]);
+      pdfDoc.encrypt({
+        userPassword: password,
+        ownerPassword: password,
+        algorithm: 'AES-128',
+      });
+
+      expect(pdfDoc.context.header.getVersionString()).toBe('2.0');
+    });
+
+    it('declares Adobe extension level 8 for AES-256 in a 1.7 file', async () => {
+      const pdfDoc = await buildDoc();
+      pdfDoc.encrypt({ userPassword: password, ownerPassword: password });
+
+      const extensions = pdfDoc.catalog.lookup(
+        PDFName.of('Extensions'),
+        PDFDict,
+      );
+      const adbe = extensions.lookup(PDFName.of('ADBE'), PDFDict);
+      expect(adbe.lookup(PDFName.of('BaseVersion'))).toBe(PDFName.of('1.7'));
+      expect(
+        adbe.lookup(PDFName.of('ExtensionLevel'), PDFNumber).asNumber(),
+      ).toBe(8);
+    });
+
+    it('raises an extension level that is too low for AES-256', async () => {
+      const pdfDoc = await buildDoc();
+      pdfDoc.catalog.set(
+        PDFName.of('Extensions'),
+        pdfDoc.context.obj({
+          ADBE: { BaseVersion: PDFName.of('1.7'), ExtensionLevel: 3 },
+          // An unrelated developer prefix must survive untouched.
+          TEST: { BaseVersion: PDFName.of('1.7'), ExtensionLevel: 1 },
+        }),
+      );
+      pdfDoc.encrypt({ userPassword: password, ownerPassword: password });
+
+      const extensions = pdfDoc.catalog.lookup(
+        PDFName.of('Extensions'),
+        PDFDict,
+      );
+      const adbe = extensions.lookup(PDFName.of('ADBE'), PDFDict);
+      expect(
+        adbe.lookup(PDFName.of('ExtensionLevel'), PDFNumber).asNumber(),
+      ).toBe(8);
+
+      const other = extensions.lookup(PDFName.of('TEST'), PDFDict);
+      expect(
+        other.lookup(PDFName.of('ExtensionLevel'), PDFNumber).asNumber(),
+      ).toBe(1);
+    });
+
+    it('does not declare an extension level for AES-128', async () => {
+      const pdfDoc = await buildDoc();
+      pdfDoc.encrypt({
+        userPassword: password,
+        ownerPassword: password,
+        algorithm: 'AES-128',
+      });
+
+      expect(
+        pdfDoc.catalog.lookupMaybe(PDFName.of('Extensions'), PDFDict),
+      ).toBeUndefined();
+    });
+
+    it.each(['RC4-40', 'RC4-128'] as SecurityOptions['algorithm'][])(
+      'refuses %s unless weak cryptography is explicitly allowed',
+      async (algorithm) => {
+        const pdfDoc = await buildDoc();
+
+        expect(() =>
+          pdfDoc.encrypt({
+            userPassword: password,
+            ownerPassword: password,
+            algorithm,
+          }),
+        ).toThrow(/RC4 is broken/);
+      },
+    );
+
+    it.each([
+      ['RC4-40', 1, 2],
+      ['RC4-128', 2, 3],
+    ] as [SecurityOptions['algorithm'], number, number][])(
+      'still writes %s when weak cryptography is allowed',
+      async (algorithm, V, R) => {
+        const pdfDoc = await buildDoc();
+        pdfDoc.encrypt({
+          userPassword: password,
+          ownerPassword: password,
+          algorithm,
+          allowWeakCryptography: true,
+        });
+
+        expect(numberEntry(pdfDoc, 'V')).toBe(V);
+        expect(numberEntry(pdfDoc, 'R')).toBe(R);
+      },
+    );
+
+    it('rejects an unknown algorithm', async () => {
+      const pdfDoc = await buildDoc();
+
+      expect(() =>
+        pdfDoc.encrypt({
+          userPassword: password,
+          algorithm: 'AES-512' as SecurityOptions['algorithm'],
+        }),
+      ).toThrow(/Unknown encryption algorithm/);
+    });
+
+    it.each(['AES-256', 'AES-128'] as SecurityOptions['algorithm'][])(
+      'round-trips a document encrypted with %s',
+      async (algorithm) => {
+        const title = 'Round Trip Title';
+        const pdfDoc = await buildDoc([1, 3]);
+        pdfDoc.setTitle(title);
+        pdfDoc.encrypt({
+          userPassword: password,
+          ownerPassword: 'owner-password',
+          algorithm,
+        });
+
+        const bytes = await pdfDoc.save();
+        const loaded = await PDFDocument.load(bytes, {
+          password,
+          updateMetadata: false,
+        });
+
+        expect(loaded.getTitle()).toBe(title);
+        expect(loaded.getPageCount()).toBe(1);
+      },
+    );
+
+    /**
+     * Revision 6 encodes the password as UTF-8, unlike the Latin-1 truncation
+     * of earlier revisions, so a non-ASCII password only round-trips if both
+     * sides agree on the encoding.
+     */
+    it('round-trips a non-ASCII password with AES-256', async () => {
+      const accented = 'mot-de-passé-ÉÀ';
+      const pdfDoc = await buildDoc();
+      pdfDoc.encrypt({ userPassword: accented, ownerPassword: 'owner' });
+
+      const bytes = await pdfDoc.save();
+      const loaded = await PDFDocument.load(bytes, {
+        password: accented,
+        updateMetadata: false,
+      });
+
+      expect(loaded.getPageCount()).toBe(1);
     });
   });
 

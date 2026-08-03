@@ -1869,6 +1869,25 @@ export default class PDFDocument {
     return embeddedPages;
   }
 
+  /**
+   * Encrypt this document with a password. Call it before [[save]].
+   *
+   * Defaults to AES-256 (`/V 5`, `/R 6`), the only algorithm ISO 32000-2 still
+   * defines. The document's own PDF version does not select the cipher; the
+   * header is instead raised to the minimum version that cipher requires, so an
+   * old document is encrypted just as strongly as a recent one. Pass
+   * {@link SecurityOptions.algorithm} to target an older viewer.
+   *
+   * > **NOTE:** Encrypting mutates the object graph in place, so a document must
+   * > not be saved again after being saved once.
+   *
+   * ```js
+   * pdfDoc.encrypt({ userPassword: 'open me', ownerPassword: 'change me' })
+   * const bytes = await pdfDoc.save()
+   * ```
+   *
+   * @param options The options to be used when encrypting this document.
+   */
   encrypt(options: SecurityOptions) {
     // PDF/A forbids encryption — refuse when the catalog already claims PDF/A.
     if (readCatalogPDFAConformance(this.catalog)) {
