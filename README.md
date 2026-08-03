@@ -1,8 +1,10 @@
 ## Forked by [Carbone](https://carbone.io)
 
 This fork follows the fork of https://github.com/cantoo-scribe/pdf-lib and adds support for new features such as:
-- a maintained changelog
+- fixed numerous issues with encryption and now follows the latest encryption standards
+- optimized save, load, and encryption operations
 - optional **`dedupeContent`** on `PDFDocument.create()` and `PDFDocument.load()` (default **`false`**). With **`dedupeContent: true`**, copying or embedding pages from other PDFs avoids duplicating shared fonts and images and usually **reduces the size** of the saved PDF.
+- a maintained [changelog](CHANGELOG.md)
 
 We will maintain this project as long as we need it but cannot guarantee the support for issues too far from our own roadmap.
 
