@@ -17,7 +17,7 @@
   - Parsing and writing now yield through `setImmediate` on Node instead of `setTimeout(fn, 0)`, which Node clamps to a millisecond. Loading and saving a large document is about 4 times faster. Hosts without `setImmediate`, browsers among them, keep `setTimeout`.
   - Speed up the fallback that locates `endstream` when a stream's `/Length` is an indirect reference or is wrong.
 
-**Imported changes up to 2.8.1 from @cantoo/fork:**
+**Imported changes up to 2.8.1 from @cantoo-scribe/pdf-lib fork:**
 
   - Convert documents to PDF/A-1/2/3 (`1B`, `2B`, `2U`, `3B`, `3U`) with `PDFDocument.convertToPDFA()` — OutputIntent (bundled sRGB), `/ID`, and XMP kept in sync with the Info dictionary on save.
   - Embed Factur-X / ZUGFeRD invoice XML with `embedFacturX()` (PDF/A-3 hybrid + required XMP).
