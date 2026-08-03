@@ -1,5 +1,9 @@
 # Changelog
 
+## v2.8.0
+
+- Fixed password encryption so document properties (Info dictionary strings such as Title, Author, Subject) are encrypted when `StrF` is set, and correctly decrypted when loading encrypted PDFs (including those that use object streams / XRef streams). Encrypted files now interoperate with viewers and tools such as Chrome, Preview, pdfinfo, and qpdf.
+
 ## v2.7.0
 
 - switch to npm + fix npm install by updating eslint dependencies

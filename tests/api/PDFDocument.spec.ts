@@ -482,6 +482,52 @@ describe('PDFDocument', () => {
     });
   });
 
+  describe('encrypt() method', () => {
+    const title = 'Encrypted Document Title';
+    const author = 'Encrypted Author';
+    const subject = 'Encrypted Subject';
+    const password = 'test-password';
+
+    const createEncryptedPdf = async (useObjectStreams: boolean) => {
+      const pdfDoc = await PDFDocument.create();
+      pdfDoc.setTitle(title);
+      pdfDoc.setAuthor(author);
+      pdfDoc.setSubject(subject);
+      pdfDoc.addPage();
+      pdfDoc.encrypt({ userPassword: password, ownerPassword: password });
+      return pdfDoc.save({ useObjectStreams });
+    };
+
+    it('encrypts Info dictionary strings so document properties decrypt correctly without object streams', async () => {
+      const bytes = await createEncryptedPdf(false);
+
+      const loaded = await PDFDocument.load(bytes, {
+        password,
+        updateMetadata: false,
+        parseSpeed: ParseSpeeds.Fastest,
+      });
+
+      expect(loaded.getTitle()).toBe(title);
+      expect(loaded.getAuthor()).toBe(author);
+      expect(loaded.getSubject()).toBe(subject);
+    });
+
+    it('preserves Info dictionary metadata after encrypt/load round-trip with object streams', async () => {
+      const bytes = await createEncryptedPdf(true);
+
+      const loaded = await PDFDocument.load(bytes, {
+        password,
+        updateMetadata: false,
+        parseSpeed: ParseSpeeds.Fastest,
+      });
+
+      expect(loaded.context.trailerInfo.Info).toBeDefined();
+      expect(loaded.getTitle()).toBe(title);
+      expect(loaded.getAuthor()).toBe(author);
+      expect(loaded.getSubject()).toBe(subject);
+    });
+  });
+
   describe('setTitle() method with options', () => {
     it('does not set the ViewerPreferences dict if the option is not set', async () => {
       const pdfDoc = await PDFDocument.create();

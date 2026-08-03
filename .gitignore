@@ -7,6 +7,7 @@ build/
 dist/
 cjs/
 es/
+0perso/
 
 tsBuildInfo.json
 flamegraph.html

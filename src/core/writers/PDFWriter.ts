@@ -2,10 +2,13 @@ import PDFCrossRefSection from '../document/PDFCrossRefSection';
 import PDFHeader from '../document/PDFHeader';
 import PDFTrailer from '../document/PDFTrailer';
 import PDFTrailerDict from '../document/PDFTrailerDict';
+import PDFArray from '../objects/PDFArray';
 import PDFDict from '../objects/PDFDict';
+import PDFHexString from '../objects/PDFHexString';
 import PDFObject from '../objects/PDFObject';
 import PDFRef from '../objects/PDFRef';
 import PDFStream from '../objects/PDFStream';
+import PDFString from '../objects/PDFString';
 import PDFContext from '../PDFContext';
 import PDFObjectStream from '../structures/PDFObjectStream';
 import PDFSecurity from '../security/PDFSecurity';
@@ -265,14 +268,66 @@ class PDFWriter {
   }
 
   protected encrypt(ref: PDFRef, object: PDFObject, security: PDFSecurity) {
+    // Encrypt dictionary strings/streams must remain plaintext.
+    if (ref === this.context.trailerInfo.Encrypt) return;
+
+    // Cross-reference streams are written unencrypted (and must be read that way).
+    if (
+      object instanceof PDFStream &&
+      object.dict.lookup(PDFName.of('Type')) === PDFName.of('XRef')
+    ) {
+      return;
+    }
+
+    const encryptFn = security.getEncryptFn(
+      ref.objectNumber,
+      ref.generationNumber,
+    );
+
     if (object instanceof PDFStream) {
-      const encryptFn = security.getEncryptFn(
-        ref.objectNumber,
-        ref.generationNumber,
+      object.updateContents(encryptFn(object.getContents()));
+      this.encryptStringsInObject(object.dict, encryptFn);
+      return;
+    }
+
+    if (object instanceof PDFString || object instanceof PDFHexString) {
+      this.context.assign(
+        ref,
+        PDFHexString.fromBytes(encryptFn(object.asBytes())),
       );
-      const unencryptedContents = object.getContents();
-      const encryptedContents = encryptFn(unencryptedContents);
-      object.updateContents(encryptedContents);
+      return;
+    }
+
+    this.encryptStringsInObject(object, encryptFn);
+  }
+
+  private encryptStringsInObject(
+    object: PDFObject,
+    encryptFn: (buffer: Uint8Array) => Uint8Array,
+  ): void {
+    if (object instanceof PDFDict) {
+      for (const [key, value] of object.entries()) {
+        // Trailer ID values must not be encrypted (PDF spec).
+        if (key === PDFName.of('ID')) continue;
+
+        if (value instanceof PDFString || value instanceof PDFHexString) {
+          object.set(key, PDFHexString.fromBytes(encryptFn(value.asBytes())));
+        } else if (value instanceof PDFDict || value instanceof PDFArray) {
+          this.encryptStringsInObject(value, encryptFn);
+        }
+      }
+      return;
+    }
+
+    if (object instanceof PDFArray) {
+      for (let idx = 0, len = object.size(); idx < len; idx++) {
+        const value = object.get(idx);
+        if (value instanceof PDFString || value instanceof PDFHexString) {
+          object.set(idx, PDFHexString.fromBytes(encryptFn(value.asBytes())));
+        } else if (value instanceof PDFDict || value instanceof PDFArray) {
+          this.encryptStringsInObject(value, encryptFn);
+        }
+      }
     }
   }
 

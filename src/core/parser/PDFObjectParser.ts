@@ -46,6 +46,8 @@ class PDFObjectParser extends BaseParser {
 
   protected readonly context: PDFContext;
   private readonly cryptoFactory?: CipherTransformFactory;
+  /** When true, literal/hex strings are not decrypted (e.g. trailer /ID). */
+  private suppressDecryption = false;
 
   constructor(
     byteStream: ByteStream,
@@ -111,7 +113,7 @@ class PDFObjectParser extends BaseParser {
     }
     this.bytes.assertNext(CharCodes.GreaterThan);
 
-    if (this.cryptoFactory && ref) {
+    if (this.cryptoFactory && ref && !this.suppressDecryption) {
       const transformer = this.cryptoFactory.createCipherTransform(
         ref.objectNumber,
         ref.generationNumber,
@@ -152,7 +154,7 @@ class PDFObjectParser extends BaseParser {
       if (nestingLvl === 0) {
         let actualValue = value.substring(1, value.length - 1);
 
-        if (this.cryptoFactory && ref) {
+        if (this.cryptoFactory && ref && !this.suppressDecryption) {
           const transformer = this.cryptoFactory.createCipherTransform(
             ref.objectNumber,
             ref.generationNumber,
@@ -213,7 +215,14 @@ class PDFObjectParser extends BaseParser {
       this.bytes.peekAhead(1) !== CharCodes.GreaterThan
     ) {
       const key = this.parseName();
+      this.skipWhitespaceAndComments();
+
+      // Trailer /ID values are never encrypted (PDF spec).
+      const prevSuppress = this.suppressDecryption;
+      if (key === PDFName.of('ID')) this.suppressDecryption = true;
       const value = this.parseObject(ref);
+      this.suppressDecryption = prevSuppress;
+
       dict.set(key, value);
       this.skipWhitespaceAndComments();
     }
@@ -270,7 +279,9 @@ class PDFObjectParser extends BaseParser {
 
     let contents = this.bytes.slice(start, end);
 
-    if (this.cryptoFactory && ref) {
+    // XRef streams are not encrypted by pdf-lib (and often by other writers).
+    const isXRef = dict.lookup(PDFName.of('Type')) === PDFName.of('XRef');
+    if (this.cryptoFactory && ref && !isXRef) {
       const transform = this.cryptoFactory.createCipherTransform(
         ref.objectNumber,
         ref.generationNumber,
