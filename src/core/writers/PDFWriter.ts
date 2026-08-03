@@ -3,7 +3,7 @@ import PDFHeader from '../document/PDFHeader';
 import PDFTrailer from '../document/PDFTrailer';
 import PDFTrailerDict from '../document/PDFTrailerDict';
 import PDFArray from '../objects/PDFArray';
-import PDFDict from '../objects/PDFDict';
+import PDFDict, { DictMap } from '../objects/PDFDict';
 import PDFHexString from '../objects/PDFHexString';
 import PDFObject from '../objects/PDFObject';
 import PDFRef from '../objects/PDFRef';
@@ -11,7 +11,7 @@ import PDFStream from '../objects/PDFStream';
 import PDFString from '../objects/PDFString';
 import PDFContext from '../PDFContext';
 import PDFObjectStream from '../structures/PDFObjectStream';
-import PDFSecurity from '../security/PDFSecurity';
+import PDFSecurity, { EncryptFn } from '../security/PDFSecurity';
 import CharCodes from '../syntax/CharCodes';
 import { copyStringIntoBuffer, waitForTick } from '../../utils';
 import {
@@ -22,6 +22,15 @@ import type { DocumentSnapshot } from '../../api/snapshot';
 import PDFNumber from '../objects/PDFNumber';
 import PDFName from '../objects/PDFName';
 import PDFRawStream from '../objects/PDFRawStream';
+
+/** A cross-reference stream is never encrypted, just like a plain trailer. */
+export const isXRefStream = (object: PDFObject): object is PDFStream =>
+  object instanceof PDFStream &&
+  object.dict.lookup(PDFName.of('Type')) === PDFName.of('XRef');
+
+/** Shallow copy that leaves the original untouched (and unmarked as changed). */
+const copyDict = (dict: PDFDict): PDFDict =>
+  PDFDict.fromMapWithContext(new Map(dict.entries()), dict.context);
 
 export interface SerializationInfo {
   size: number;
@@ -235,7 +244,8 @@ class PDFWriter {
       if (!this.shouldSave(incremental, ref.objectNumber, indirectObjects)) {
         continue;
       }
-      if (security) this.encrypt(ref, object, security);
+      // Swap in the encrypted object so its size and bytes stay consistent.
+      if (security) indirectObject[1] = this.encrypt(ref, object, security);
       xref.addEntry(ref, size);
       size += this.computeIndirectObjectSize(indirectObject);
       if (this.shouldWaitForTick(1)) await waitForTick();
@@ -267,17 +277,24 @@ class PDFWriter {
     return { size, header, indirectObjects, xref, trailerDict, trailer };
   }
 
-  protected encrypt(ref: PDFRef, object: PDFObject, security: PDFSecurity) {
-    // Encrypt dictionary strings/streams must remain plaintext.
-    if (ref === this.context.trailerInfo.Encrypt) return;
+  /**
+   * Returns the encrypted form of `object`, leaving the original untouched.
+   *
+   * Nothing is mutated so that a document can be saved more than once without
+   * encrypting the same bytes twice, and so that objects which contain no
+   * strings are shared rather than copied.
+   */
+  protected encrypt(
+    ref: PDFRef,
+    object: PDFObject,
+    security: PDFSecurity,
+  ): PDFObject {
+    // The Encrypt dictionary itself is never encrypted.
+    if (ref === this.context.trailerInfo.Encrypt) return object;
 
-    // Cross-reference streams are written unencrypted (and must be read that way).
-    if (
-      object instanceof PDFStream &&
-      object.dict.lookup(PDFName.of('Type')) === PDFName.of('XRef')
-    ) {
-      return;
-    }
+    // A cross-reference stream is written in the clear, like a plain trailer,
+    // so neither its contents nor the strings in its dictionary are encrypted.
+    if (isXRefStream(object)) return object;
 
     const encryptFn = security.getEncryptFn(
       ref.objectNumber,
@@ -285,50 +302,74 @@ class PDFWriter {
     );
 
     if (object instanceof PDFStream) {
-      object.updateContents(encryptFn(object.getContents()));
-      this.encryptStringsInObject(object.dict, encryptFn);
-      return;
-    }
-
-    if (object instanceof PDFString || object instanceof PDFHexString) {
-      this.context.assign(
-        ref,
-        PDFHexString.fromBytes(encryptFn(object.asBytes())),
+      // Always copy the dictionary: serializing a stream rewrites /Length, and
+      // that must not touch the original object.
+      const dict = this.encryptStringsInDict(object.dict, encryptFn);
+      return PDFRawStream.of(
+        dict === object.dict ? copyDict(object.dict) : dict,
+        encryptFn(object.getContents()),
       );
-      return;
     }
 
-    this.encryptStringsInObject(object, encryptFn);
+    return this.encryptStrings(object, encryptFn);
   }
 
-  private encryptStringsInObject(
-    object: PDFObject,
-    encryptFn: (buffer: Uint8Array) => Uint8Array,
-  ): void {
+  /**
+   * Returns `object` with every string it contains encrypted, or `object`
+   * itself when it holds no strings.
+   */
+  private encryptStrings(object: PDFObject, encryptFn: EncryptFn): PDFObject {
+    if (object instanceof PDFString || object instanceof PDFHexString) {
+      return PDFHexString.fromBytes(encryptFn(object.asBytes()));
+    }
     if (object instanceof PDFDict) {
-      for (const [key, value] of object.entries()) {
-        // Trailer ID values must not be encrypted (PDF spec).
-        if (key === PDFName.of('ID')) continue;
-
-        if (value instanceof PDFString || value instanceof PDFHexString) {
-          object.set(key, PDFHexString.fromBytes(encryptFn(value.asBytes())));
-        } else if (value instanceof PDFDict || value instanceof PDFArray) {
-          this.encryptStringsInObject(value, encryptFn);
-        }
-      }
-      return;
+      return this.encryptStringsInDict(object, encryptFn);
     }
-
     if (object instanceof PDFArray) {
-      for (let idx = 0, len = object.size(); idx < len; idx++) {
-        const value = object.get(idx);
-        if (value instanceof PDFString || value instanceof PDFHexString) {
-          object.set(idx, PDFHexString.fromBytes(encryptFn(value.asBytes())));
-        } else if (value instanceof PDFDict || value instanceof PDFArray) {
-          this.encryptStringsInObject(value, encryptFn);
-        }
-      }
+      return this.encryptStringsInArray(object, encryptFn);
     }
+    return object;
+  }
+
+  private encryptStringsInDict(dict: PDFDict, encryptFn: EncryptFn): PDFDict {
+    // The signed contents of a signature dictionary are exempt from encryption.
+    const isSignature = dict.lookup(PDFName.of('Type')) === PDFName.of('Sig');
+
+    const entries = dict.entries();
+    let map: DictMap | undefined;
+
+    for (let idx = 0, len = entries.length; idx < len; idx++) {
+      const [key, value] = entries[idx];
+      if (isSignature && key === PDFName.of('Contents')) continue;
+
+      const encrypted = this.encryptStrings(value, encryptFn);
+      if (encrypted === value) continue;
+
+      // Build the copy through the map so cloning never marks the original
+      // object as changed for incremental saves.
+      map = map ?? new Map(entries);
+      map.set(key, encrypted);
+    }
+
+    return map ? PDFDict.fromMapWithContext(map, dict.context) : dict;
+  }
+
+  private encryptStringsInArray(
+    array: PDFArray,
+    encryptFn: EncryptFn,
+  ): PDFArray {
+    let copy: PDFArray | undefined;
+
+    for (let idx = 0, len = array.size(); idx < len; idx++) {
+      const value = array.get(idx);
+      const encrypted = this.encryptStrings(value, encryptFn);
+      if (encrypted === value) continue;
+
+      copy = copy ?? array.clone();
+      copy.set(idx, encrypted);
+    }
+
+    return copy ?? array;
   }
 
   protected shouldWaitForTick = (n: number) => {

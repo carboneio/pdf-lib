@@ -526,6 +526,167 @@ describe('PDFDocument', () => {
       expect(loaded.getAuthor()).toBe(author);
       expect(loaded.getSubject()).toBe(subject);
     });
+
+    /**
+     * `PDFHexString.fromText` writes UTF-16BE as ASCII hex digits, so a
+     * plaintext leak shows up as those hex digits rather than as raw bytes.
+     */
+    const containsPlaintext = (bytes: Uint8Array, text: string) => {
+      const utf16le = Buffer.from(text, 'utf16le');
+      const utf16be = [0xfe, 0xff];
+      for (let idx = 0; idx < utf16le.length; idx += 2) {
+        utf16be.push(utf16le[idx + 1], utf16le[idx]);
+      }
+      const file = Buffer.from(bytes).toString('latin1').toUpperCase();
+      return (
+        file.includes(text.toUpperCase()) ||
+        file.includes(Buffer.from(utf16be).toString('hex').toUpperCase())
+      );
+    };
+
+    it('encrypts strings that are themselves indirect objects', async () => {
+      const secret = 'Indirect String Secret';
+      const pdfDoc = await PDFDocument.create();
+      pdfDoc.addPage();
+      const key = PDFName.of('TestIndirectString');
+      pdfDoc.catalog.set(
+        key,
+        pdfDoc.context.register(PDFHexString.fromText(secret)),
+      );
+      pdfDoc.encrypt({ userPassword: password, ownerPassword: password });
+
+      const bytes = await pdfDoc.save({ useObjectStreams: false });
+      expect(containsPlaintext(bytes, secret)).toBe(false);
+
+      const loaded = await PDFDocument.load(bytes, {
+        password,
+        updateMetadata: false,
+      });
+      expect(loaded.catalog.lookup(key, PDFHexString).decodeText()).toBe(
+        secret,
+      );
+    });
+
+    it.each([false, true])(
+      'does not encrypt twice when save() is called repeatedly (useObjectStreams=%s)',
+      async (useObjectStreams) => {
+        const pdfDoc = await PDFDocument.create();
+        pdfDoc.setTitle(title);
+        pdfDoc.setAuthor(author);
+        pdfDoc.addPage();
+        pdfDoc.encrypt({ userPassword: password, ownerPassword: password });
+
+        const first = await pdfDoc.save({ useObjectStreams });
+        const second = await pdfDoc.save({ useObjectStreams });
+
+        for (const bytes of [first, second]) {
+          const loaded = await PDFDocument.load(bytes, {
+            password,
+            updateMetadata: false,
+          });
+          expect(loaded.getTitle()).toBe(title);
+          expect(loaded.getAuthor()).toBe(author);
+        }
+      },
+    );
+
+    it('leaves the signed contents of a signature dictionary unencrypted', async () => {
+      const signature = 'deadbeef'.repeat(8);
+      const pdfDoc = await PDFDocument.create();
+      pdfDoc.addPage();
+      const sigDict = pdfDoc.context.obj({
+        Type: 'Sig',
+        Filter: 'Adobe.PPKLite',
+        SubFilter: 'adbe.pkcs7.detached',
+        ByteRange: [0, 100, 200, 300],
+      });
+      const contentsKey = PDFName.of('Contents');
+      sigDict.set(contentsKey, PDFHexString.of(signature));
+      const sigKey = PDFName.of('TestSignature');
+      pdfDoc.catalog.set(sigKey, pdfDoc.context.register(sigDict));
+      pdfDoc.encrypt({ userPassword: password, ownerPassword: password });
+
+      const bytes = await pdfDoc.save({ useObjectStreams: false });
+
+      // The signature bytes must survive verbatim, on disk and after loading.
+      expect(Buffer.from(bytes).toString('latin1').toLowerCase()).toContain(
+        signature,
+      );
+
+      const loaded = await PDFDocument.load(bytes, {
+        password,
+        updateMetadata: false,
+      });
+      const loadedSig = loaded.catalog.lookup(sigKey, PDFDict);
+      expect(
+        loadedSig.lookup(contentsKey, PDFHexString).asString().toLowerCase(),
+      ).toBe(signature);
+    });
+
+    it('encrypts an /ID string that is not the trailer file identifier', async () => {
+      const customId = 'Custom Identifier Value';
+      const pdfDoc = await PDFDocument.create();
+      pdfDoc.addPage();
+      const dict = pdfDoc.context.obj({});
+      const idKey = PDFName.of('ID');
+      dict.set(idKey, PDFHexString.fromText(customId));
+      const dictKey = PDFName.of('TestCustomDict');
+      pdfDoc.catalog.set(dictKey, pdfDoc.context.register(dict));
+      pdfDoc.encrypt({ userPassword: password, ownerPassword: password });
+
+      const bytes = await pdfDoc.save({ useObjectStreams: false });
+      expect(containsPlaintext(bytes, customId)).toBe(false);
+
+      const loaded = await PDFDocument.load(bytes, {
+        password,
+        updateMetadata: false,
+      });
+      const loadedDict = loaded.catalog.lookup(dictKey, PDFDict);
+      expect(loadedDict.lookup(idKey, PDFHexString).decodeText()).toBe(
+        customId,
+      );
+    });
+
+    it('encrypts strings inside object streams exactly once', async () => {
+      const secret = 'Compressed String Secret';
+      const pdfDoc = await PDFDocument.create();
+      pdfDoc.addPage();
+      const dict = pdfDoc.context.obj({});
+      const key = PDFName.of('TestCompressed');
+      dict.set(key, PDFHexString.fromText(secret));
+      pdfDoc.catalog.set(key, pdfDoc.context.register(dict));
+      pdfDoc.encrypt({ userPassword: password, ownerPassword: password });
+
+      const bytes = await pdfDoc.save({ useObjectStreams: true });
+      expect(containsPlaintext(bytes, secret)).toBe(false);
+
+      const loaded = await PDFDocument.load(bytes, {
+        password,
+        updateMetadata: false,
+      });
+      const loadedDict = loaded.catalog.lookup(key, PDFDict);
+      expect(loadedDict.lookup(key, PDFHexString).decodeText()).toBe(secret);
+    });
+
+    it('keeps the trailer file identifier unencrypted', async () => {
+      const bytes = await createEncryptedPdf(true);
+
+      const loaded = await PDFDocument.load(bytes, {
+        password,
+        updateMetadata: false,
+      });
+
+      // Both halves of /ID must be the same 16-byte value pdf-lib generated;
+      // wrongly decrypting them would corrupt or empty them.
+      const fileIds = loaded.context.lookup(
+        loaded.context.trailerInfo.ID,
+        PDFArray,
+      );
+      const first = fileIds.lookup(0, PDFHexString).asBytes();
+      const second = fileIds.lookup(1, PDFHexString).asBytes();
+      expect(first).toHaveLength(16);
+      expect(Array.from(second)).toEqual(Array.from(first));
+    });
   });
 
   describe('setTitle() method with options', () => {
