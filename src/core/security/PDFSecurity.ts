@@ -846,15 +846,14 @@ const lsbFirstWord = (data: number): number =>
 const bufferToWordArray = (buffer: Uint8Array): WordArray =>
   CryptoJS.lib.WordArray.create(buffer as unknown as number[]);
 
+/** CryptoJS packs bytes into big-endian 32 bit words, hence the shifting. */
 const wordArrayToBuffer = (wordArray: WordArray): Uint8Array => {
-  const byteArray = [];
-  for (let i = 0; i < wordArray.sigBytes; i++) {
-    byteArray.push(
-      (wordArray.words[Math.floor(i / 4)] >> (8 * (3 - (i % 4)))) & 0xff,
-    );
+  const { words, sigBytes } = wordArray;
+  const buffer = new Uint8Array(sigBytes);
+  for (let i = 0; i < sigBytes; i++) {
+    buffer[i] = (words[i >>> 2] >>> (24 - (i & 3) * 8)) & 0xff;
   }
-
-  return Uint8Array.from(byteArray);
+  return buffer;
 };
 
 /*
