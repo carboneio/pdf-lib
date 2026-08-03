@@ -1,4 +1,3 @@
-import PDFHeader from '../document/PDFHeader';
 import PDFTrailer from '../document/PDFTrailer';
 import PDFInvalidObject from '../objects/PDFInvalidObject';
 import PDFName from '../objects/PDFName';
@@ -69,7 +68,7 @@ class PDFStreamWriter extends PDFWriter {
   private _refToDeleteAfterSave = 0;
   protected async computeBufferSize(incremental: boolean) {
     this._refToDeleteAfterSave = 0;
-    const header = PDFHeader.forVersion(1, 7);
+    const header = this.context.header;
 
     let size = this.snapshot.pdfSize;
     if (!incremental) {
@@ -104,6 +103,18 @@ class PDFStreamWriter extends PDFWriter {
         object instanceof PDFRawStream &&
         object.dict.lookup(PDFName.of('Type')) === PDFName.of('XRef')
       ) {
+        continue;
+      }
+
+      // Source ObjStm containers must be skipped on full saves: their
+      // contents have already been extracted and registered individually by
+      // PDFObjectStreamParser. Re-serialising the raw container would produce
+      // stale duplicate copies; on the next load those copies overwrite the
+      // current versions (last-assignment wins in PDFObjectStreamParser),
+      // silently discarding any modifications made between the two saves.
+      // Newly-created ObjStm objects (PDFObjectStream, not PDFRawStream) are
+      // unaffected by this check and are still written normally below.
+      if (!incremental && this.shouldSkipCopiedObjectStream(object)) {
         continue;
       }
 
@@ -188,7 +199,7 @@ class PDFStreamWriter extends PDFWriter {
     return { size, header, indirectObjects: uncompressedObjects, trailer };
   }
 
-  override async serializeToBuffer(): Promise<Uint8Array> {
+  override async serializeToBuffer() {
     const buffer = await super.serializeToBuffer();
     const firstTempRef =
       this.context.largestObjectNumber - this._refToDeleteAfterSave + 1;

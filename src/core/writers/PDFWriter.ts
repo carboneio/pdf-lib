@@ -114,7 +114,7 @@ class PDFWriter {
     return should;
   }
 
-  async serializeToBuffer(): Promise<Uint8Array> {
+  async serializeToBuffer() {
     const incremental = !(this.snapshot instanceof DefaultDocumentSnapshot);
     const { size, header, indirectObjects, xref, trailerDict, trailer } =
       await this.computeBufferSize(incremental);
@@ -132,6 +132,9 @@ class PDFWriter {
       const [ref, object] = indirectObjects[idx];
 
       if (!this.shouldSave(incremental, ref.objectNumber, indirectObjects)) {
+        continue;
+      }
+      if (!incremental && this.shouldSkipCopiedObjectStream(object)) {
         continue;
       }
 
@@ -215,7 +218,7 @@ class PDFWriter {
   ): Promise<SerializationInfo> {
     this._largestSkippedObjectNum = 0;
     this._lastXRefObjectNumber = 0;
-    const header = PDFHeader.forVersion(1, 7);
+    const header = this.context.header;
 
     let size = this.snapshot.pdfSize;
     if (!incremental) {
@@ -233,6 +236,12 @@ class PDFWriter {
       const indirectObject = indirectObjects[idx];
       const [ref, object] = indirectObject;
       if (!this.shouldSave(incremental, ref.objectNumber, indirectObjects)) {
+        continue;
+      }
+      // Source ObjStm containers must not be re-serialised on full saves (see
+      // PDFStreamWriter for a detailed explanation). For incremental saves the
+      // snapshot already excludes them, so this guard is a no-op there.
+      if (!incremental && this.shouldSkipCopiedObjectStream(object)) {
         continue;
       }
       // Swap in the encrypted object so its size and bytes stay consistent.
@@ -345,6 +354,13 @@ class PDFWriter {
         }
       }
     }
+  }
+
+  protected shouldSkipCopiedObjectStream(object: PDFObject): boolean {
+    return (
+      object instanceof PDFRawStream &&
+      object.dict.lookup(PDFName.of('Type')) === PDFName.of('ObjStm')
+    );
   }
 
   protected shouldWaitForTick = (n: number) => {

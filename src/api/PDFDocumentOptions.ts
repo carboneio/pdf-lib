@@ -43,6 +43,7 @@ export interface LoadOptions {
    * cross-call stream deduplication.
    */
   dedupeContent?: boolean;
+  preserveXFA?: boolean;
 }
 
 export interface CreateOptions {

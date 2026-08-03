@@ -22,6 +22,10 @@ import PDFFont from './PDFFont';
 import PDFImage from './PDFImage';
 import PDFSvg from './PDFSvg';
 import {
+  JavaScriptActionMap,
+  extractAdditionalActions,
+} from './PDFJavaScriptAction';
+import {
   PDFPageDrawCircleOptions,
   PDFPageDrawEllipseOptions,
   PDFPageDrawImageOptions,
@@ -707,6 +711,28 @@ export default class PDFPage {
   }
 
   /**
+   * Get the JavaScript actions associated with this page.
+   * Returns a map of action types to JavaScript actions.
+   * For example:
+   * ```js
+   * const page = pdfDoc.getPage(0)
+   * const actions = page.getJavaScriptActions()
+   * if (actions && actions.pageOpen) {
+   *   console.log('Page open script:', actions.pageOpen.getScript())
+   * }
+   * if (actions && actions.pageClose) {
+   *   console.log('Page close script:', actions.pageClose.getScript())
+   * }
+   * ```
+   * @returns A map of JavaScript actions for this page, or undefined if none exist.
+   */
+  getJavaScriptActions(): JavaScriptActionMap | undefined {
+    const aaDict = this.node.lookupMaybe(PDFName.of('AA'), PDFDict);
+    if (!aaDict) return undefined;
+    return extractAdditionalActions(aaDict, this.doc, 'page');
+  }
+
+  /**
    * Choose a default font size for this page. The default font size will be
    * used whenever text is drawn on this page and no font size is specified.
    * For example:
@@ -981,6 +1007,9 @@ export default class PDFPage {
     assertOrUndefined(options.maxWidth, 'options.maxWidth', ['number']);
     assertOrUndefined(options.wordBreaks, 'options.wordBreaks', [Array]);
     assertIsOneOfOrUndefined(options.blendMode, 'options.blendMode', BlendMode);
+    assertOrUndefined(options.characterSpacing, 'options.characterSpacing', [
+      'number',
+    ]);
     assertOrUndefined(options.strokeColor, 'options.strokeColor', [
       [Object, 'Color'],
     ]);
@@ -989,9 +1018,12 @@ export default class PDFPage {
 
     const { oldFont, newFont, newFontKey } = this.setOrEmbedFont(options.font);
     const fontSize = options.size || this.fontSize;
+    const characterSpacing = options.characterSpacing ?? 0;
 
     const wordBreaks = options.wordBreaks || this.doc.defaultWordBreaks;
-    const textWidth = (t: string) => newFont.widthOfTextAtSize(t, fontSize);
+    const textWidth = (t: string) =>
+      newFont.widthOfTextAtSize(t, fontSize) +
+      characterSpacing * newFont.glyphCountOfText(t);
     const lines =
       options.maxWidth === undefined
         ? lineSplit(cleanText(text))
@@ -1022,6 +1054,7 @@ export default class PDFPage {
         graphicsState: graphicsStateKey,
         matrix: options.matrix,
         clipSpaces: options.clipSpaces,
+        characterSpacing: options.characterSpacing,
         strokeColor: options.strokeColor,
         strokeWidth: options.strokeWidth,
         renderMode: options.renderMode,

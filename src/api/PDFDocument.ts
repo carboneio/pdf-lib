@@ -27,6 +27,7 @@ import {
   PDFCatalog,
   PDFContext,
   PDFDict,
+  PDFHeader,
   decodePDFRawStream,
   PDFStream,
   PDFRawStream,
@@ -64,6 +65,7 @@ import {
   assertIsOneOfOrUndefined,
   assertOrUndefined,
   assertRange,
+  BinaryData,
   Cache,
   canBeConvertedToUint8Array,
   encodeToBase64,
@@ -71,16 +73,34 @@ import {
   pluckIndices,
   range,
   toUint8Array,
+  utf8Encode,
 } from '../utils';
 import FileEmbedder, { AFRelationship } from '../core/embedders/FileEmbedder';
 import PDFEmbeddedFile from './PDFEmbeddedFile';
 import PDFJavaScript from './PDFJavaScript';
 import JavaScriptEmbedder from '../core/embedders/JavaScriptEmbedder';
+import PDFJavaScriptAction from './PDFJavaScriptAction';
 import { CipherTransformFactory } from '../core/crypto';
 import PDFSvg from './PDFSvg';
-import PDFSecurity, { SecurityOptions } from '../core/security/PDFSecurity';
+import PDFSecurity, {
+  SecurityOptions,
+  generateRandomFileId,
+} from '../core/security/PDFSecurity';
 import { IncrementalDocumentSnapshot } from './snapshot';
 import type { DocumentSnapshot } from './snapshot';
+import {
+  ConvertToPDFAOptions,
+  buildPDFAMetadata,
+  extractForeignXmpDescriptions,
+  mergeXmpExtensionFragments,
+  getDefaultSRGBProfile,
+  parseConformance,
+  ParsedConformance,
+} from './pdfa';
+import {
+  readCatalogMetadataXml,
+  readCatalogPDFAConformance,
+} from './pdfa/catalogMetadata';
 
 export type BasePDFAttachment = {
   name: string;
@@ -111,11 +131,12 @@ export default class PDFDocument {
    * Load an existing [[PDFDocument]]. The input data can be provided in
    * multiple formats:
    *
-   * | Type          | Contents                                               |
-   * | ------------- | ------------------------------------------------------ |
-   * | `string`      | A base64 encoded string (or data URI) containing a PDF |
-   * | `Uint8Array`  | The raw bytes of a PDF                                 |
-   * | `ArrayBuffer` | The raw bytes of a PDF                                 |
+   * | Type               | Contents                                               |
+   * | ------------------ | ------------------------------------------------------ |
+   * | `string`           | A base64 encoded string (or data URI) containing a PDF |
+   * | `Uint8Array`       | The raw bytes of a PDF                                 |
+   * | `ArrayBuffer`      | The raw bytes of a PDF                                 |
+   * | `ArrayBufferView`  | The raw bytes of a PDF (includes Node.js `Buffer`)     |
    *
    * For example:
    * ```js
@@ -143,10 +164,10 @@ export default class PDFDocument {
    * const pdfDoc1 = await PDFDocument.load(base64)
    * const pdfDoc2 = await PDFDocument.load(dataUri)
    *
-   * // pdf=Uint8Array
+   * // pdf=Uint8Array / Node Buffer
    * import fs from 'fs'
-   * const uint8Array = fs.readFileSync('with_update_sections.pdf')
-   * const pdfDoc3 = await PDFDocument.load(uint8Array)
+   * const bytes = fs.readFileSync('with_update_sections.pdf')
+   * const pdfDoc3 = await PDFDocument.load(bytes)
    *
    * // pdf=ArrayBuffer
    * const url = 'https://pdf-lib.js.org/assets/with_update_sections.pdf'
@@ -159,10 +180,7 @@ export default class PDFDocument {
    * @param options The options to be used when loading the document.
    * @returns Resolves with a document loaded from the input.
    */
-  static async load(
-    pdf: string | Uint8Array | ArrayBuffer,
-    options: LoadOptions = {},
-  ) {
+  static async load(pdf: BinaryData, options: LoadOptions = {}) {
     const {
       ignoreEncryption = false,
       parseSpeed = ParseSpeeds.Slow,
@@ -173,9 +191,10 @@ export default class PDFDocument {
       password,
       forIncrementalUpdate = false,
       dedupeContent = false,
+      preserveXFA = false,
     } = options;
 
-    assertIs(pdf, 'pdf', ['string', Uint8Array, ArrayBuffer]);
+    assertIs(pdf, 'pdf', ['string', ArrayBuffer, 'ArrayBufferView']);
     assertIs(ignoreEncryption, 'ignoreEncryption', ['boolean']);
     assertIs(parseSpeed, 'parseSpeed', ['number']);
     assertIs(throwOnInvalidObject, 'throwOnInvalidObject', ['boolean']);
@@ -218,6 +237,7 @@ export default class PDFDocument {
         true,
         updateMetadata,
         dedupeContent,
+        preserveXFA,
       );
       if (forIncrementalUpdate) pdfDoc.takeSnapshot();
       return pdfDoc;
@@ -227,6 +247,7 @@ export default class PDFDocument {
         ignoreEncryption,
         updateMetadata,
         dedupeContent,
+        preserveXFA,
       );
       if (forIncrementalUpdate) pdfDoc.takeSnapshot();
       return pdfDoc;
@@ -262,6 +283,11 @@ export default class PDFDocument {
   defaultWordBreaks: string[] = [' '];
 
   private fontkit?: Fontkit;
+  /**
+   * When true, [[prepareForSave]] regenerates owned Info/`pdfaid` XMP.
+   * Set by [[convertToPDFA]]. Part/level itself lives only in catalog XMP.
+   */
+  private managePDFAMetadata = false;
   private pageCount: number | undefined;
   private readonly pageCache: Cache<PDFPage[]>;
   private readonly pageMap: Map<PDFPageLeaf, PDFPage>;
@@ -271,6 +297,7 @@ export default class PDFDocument {
   private readonly embeddedPages: PDFEmbeddedPage[];
   private readonly embeddedFiles: PDFEmbeddedFile[];
   private readonly javaScripts: PDFJavaScript[];
+  private readonly preserveXFA: boolean;
 
   /**
    * When `dedupeContent` is true: reuse one [[PDFObjectCopier]] per source
@@ -298,9 +325,11 @@ export default class PDFDocument {
     ignoreEncryption: boolean,
     updateMetadata: boolean,
     dedupeContent: boolean,
+    preserveXFA = false,
   ) {
     assertIs(context, 'context', [[PDFContext, 'PDFContext']]);
     assertIs(ignoreEncryption, 'ignoreEncryption', ['boolean']);
+    assertIs(preserveXFA, 'preserveXFA', ['boolean']);
     assertIs(dedupeContent, 'dedupeContent', ['boolean']);
 
     this.context = context;
@@ -321,6 +350,7 @@ export default class PDFDocument {
     this.embeddedPages = [];
     this.embeddedFiles = [];
     this.javaScripts = [];
+    this.preserveXFA = preserveXFA;
 
     if (!ignoreEncryption && this.isEncrypted) throw new EncryptedPDFError();
 
@@ -350,7 +380,7 @@ export default class PDFDocument {
    * For example:
    * ```js
    * import { PDFDocument } from 'pdf-lib'
-   * import fontkit from '@pdf-lib/fontkit'
+   * import fontkit from 'fontkit'
    *
    * const pdfDoc = await PDFDocument.create()
    * pdfDoc.registerFontkit(fontkit)
@@ -374,13 +404,22 @@ export default class PDFDocument {
    *   console.log(`${type}: ${name}`)
    * })
    * ```
+   *
+   * **XFA caveat:** if the document contains XFA form data and it was **not**
+   * loaded with `preserveXFA: true`, calling this method strips the XFA data
+   * (pdf-lib cannot render or edit XFA and removes it to keep the AcroForm
+   * consistent). Because the XFA read/write helpers ([[getXFAJavaScripts]],
+   * [[setXFAJavaScript]]) operate on that same data, call them **before**
+   * `getForm()` — or load with `preserveXFA: true`
+   * otherwise the XFA will already be gone.
+   *
    * @returns The form for this document.
    */
   getForm(): PDFForm {
     const form = this.formCache.access();
-    if (form.hasXFA()) {
+    if (form.hasXFA() && !this.preserveXFA) {
       console.warn(
-        'Removing XFA form data as pdf-lib does not support reading or writing XFA',
+        'Removing XFA form data as pdf-lib does not support reading or writing XFA. Set preserveXFA: true in load options to keep XFA data.',
       );
       form.deleteXFA();
     }
@@ -668,6 +707,132 @@ export default class PDFDocument {
     assertIs(modificationDate, 'modificationDate', [[Date, 'Date']]);
     const key = PDFName.of('ModDate');
     this.getInfoDict().set(key, PDFString.fromDate(modificationDate));
+  }
+
+  /**
+   * Convert this document into a PDF/A compliant document. PDF/A is an
+   * ISO-standardized subset of PDF designed for the long-term archiving of
+   * electronic documents. This method performs the structural changes that a
+   * PDF/A file requires:
+   *
+   * * A unique document identifier (`/ID`) is added to the trailer.
+   * * An `OutputIntent` referencing an embedded ICC color profile is added (the
+   *   bundled sRGB profile is used by default).
+   * * An XMP metadata packet identifying the PDF/A conformance level is added
+   *   and kept consistent with the document information dictionary.
+   * * The PDF header version is set appropriately for the targeted part.
+   *
+   * For example:
+   * ```js
+   * const pdfDoc = await PDFDocument.load(existingPdfBytes)
+   * pdfDoc.convertToPDFA({ conformance: '3B' })
+   * const pdfBytes = await pdfDoc.save()
+   * ```
+   *
+   * > **This method does not, and cannot, guarantee full PDF/A compliance on
+   * > its own.** PDF/A also forbids certain content (encryption, non-embedded
+   * > fonts, transparency for part 1, JavaScript, external references, etc.).
+   * > In particular, any text you draw must use an **embedded** font — the
+   * > 14 standard fonts are not embedded and are therefore not PDF/A compliant.
+   * > You are responsible for ensuring the document's content conforms. Validate
+   * > the result with a tool such as [veraPDF](https://verapdf.org/).
+   *
+   * > **Unicode conformance (`'2U'` / `'3U'`) is not verified.** The `U` levels
+   * > additionally require every glyph in the document to have a Unicode
+   * > mapping (a `ToUnicode` CMap or equivalent). This method writes the
+   * > requested conformance level into the metadata but does **not** inspect
+   * > existing content to confirm the mappings are present — ensuring that is
+   * > the caller's responsibility.
+   *
+   * > **XMP is refreshed on save.** After conversion, pdf-lib *manages* the
+   * > catalog `/Metadata` stream. On [[save]] / [[saveIncremental]] /
+   * > [[saveAsBase64]] it rebuilds the owned slice (Info-dict mirrors +
+   * > `pdfaid`) so Info and XMP stay equivalent as required by PDF/A, while
+   * > preserving foreign `rdf:Description` blocks (e.g. Factur-X / custom
+   * > schemas). Pass one-shot extras via `options.extensions`; they are written
+   * > into the initial packet and then preserved like any other foreign block.
+   *
+   * > **Ownership contract.** After this method runs, pdf-lib owns the `dc`,
+   * > `xmp`, `pdf`, and `pdfaid` schemas. Add extra XMP with
+   * > `options.extensions` or by merging foreign `rdf:Description` elements
+   * > into the packet — those are preserved on sync. Hand-editing owned fields
+   * > in the XMP (e.g. `dc:title`) without going through the Info setters will
+   * > be overwritten.
+   *
+   * @param options The options to be used when converting the document.
+   */
+  convertToPDFA(options: ConvertToPDFAOptions = {}): void {
+    assertOrUndefined(options.conformance, 'options.conformance', ['string']);
+    assertOrUndefined(options.iccProfile, 'options.iccProfile', [Uint8Array]);
+    assertOrUndefined(
+      options.outputConditionIdentifier,
+      'options.outputConditionIdentifier',
+      ['string'],
+    );
+    assertIsOneOfOrUndefined(
+      options.colorComponents,
+      'options.colorComponents',
+      [1, 3, 4],
+    );
+    assertOrUndefined(options.extensions, 'options.extensions', [Array]);
+
+    const {
+      conformance = '3B',
+      iccProfile = getDefaultSRGBProfile(),
+      outputConditionIdentifier = 'sRGB IEC61966-2.1',
+      colorComponents = 3,
+      extensions,
+    } = options;
+
+    const parsed = parseConformance(conformance);
+
+    if (this.isEncrypted) {
+      throw new Error('PDF/A documents must not be encrypted.');
+    }
+
+    const alreadyConverted =
+      readCatalogPDFAConformance(this.catalog) !== undefined;
+
+    // PDF/A-1 is based on PDF 1.4; parts 2 and 3 are based on PDF 1.7.
+    this.context.header = PDFHeader.forVersion(1, parsed.part === 1 ? 4 : 7);
+
+    // A file identifier (`/ID`) is required by PDF/A. Reuse an existing one if
+    // present so incremental updates and encryption stay consistent with the
+    // previously assigned identity.
+    if (!this.context.lookup(this.context.trailerInfo.ID)) {
+      const id = PDFHexString.fromBytes(generateRandomFileId());
+      this.context.trailerInfo.ID = this.context.obj([id, id]);
+    }
+
+    // Only (re)install the OutputIntent on first conversion, or when the caller
+    // supplies a custom ICC profile / condition — avoids orphaning ICC streams
+    // on repeated convertToPDFA / embedFacturX calls.
+    const shouldUpdateOutputIntent =
+      !alreadyConverted ||
+      options.iccProfile !== undefined ||
+      options.outputConditionIdentifier !== undefined ||
+      options.colorComponents !== undefined;
+
+    if (shouldUpdateOutputIntent) {
+      const iccStream = this.context.stream(iccProfile, {
+        N: colorComponents,
+      });
+      const outputIntent = this.context.obj({
+        Type: 'OutputIntent',
+        S: 'GTS_PDFA1',
+        OutputConditionIdentifier: PDFString.of(outputConditionIdentifier),
+        DestOutputProfile: this.context.register(iccStream),
+      });
+      this.catalog.set(
+        PDFName.of('OutputIntents'),
+        this.context.obj([this.context.register(outputIntent)]),
+      );
+    }
+
+    // Opt into Info↔XMP sync on later saves; write `pdfaid` into catalog XMP
+    // (the single source of truth for part/level).
+    this.managePDFAMetadata = true;
+    this.syncPDFAMetadata(extensions, parsed);
   }
 
   /**
@@ -976,6 +1141,114 @@ export default class PDFDocument {
   }
 
   /**
+   * Get all document-level JavaScript scripts from the document's Names dictionary.
+   * These scripts are executed when the document is opened.
+   * For example:
+   * ```js
+   * const scripts = pdfDoc.getDocumentJavaScripts()
+   * scripts.forEach(({ name, script }) => {
+   *   console.log(`Script "${name}":`, script)
+   * })
+   * ```
+   * @returns An array of objects containing script names and their JavaScript code.
+   */
+  getDocumentJavaScripts(): Array<{ name: string; script: string }> {
+    const scripts: Array<{ name: string; script: string }> = [];
+
+    const namesDict = this.catalog.lookupMaybe(PDFName.of('Names'), PDFDict);
+    const javascriptDict = namesDict?.lookupMaybe(
+      PDFName.of('JavaScript'),
+      PDFDict,
+    );
+    const jsNames = javascriptDict?.lookupMaybe(PDFName.of('Names'), PDFArray);
+    if (!jsNames) return scripts;
+
+    // Names array is a flat array of [name1, dict1, name2, dict2, ...]
+    for (let idx = 0; idx < jsNames.size(); idx += 2) {
+      const nameObj = jsNames.get(idx);
+      const actionObj = jsNames.get(idx + 1);
+      if (!nameObj || !actionObj) continue;
+
+      let name: string;
+      if (nameObj instanceof PDFString) {
+        name = nameObj.asString();
+      } else if (nameObj instanceof PDFHexString) {
+        name = nameObj.decodeText();
+      } else {
+        continue;
+      }
+
+      const actionDict =
+        actionObj instanceof PDFRef
+          ? this.context.lookupMaybe(actionObj, PDFDict)
+          : actionObj instanceof PDFDict
+            ? actionObj
+            : undefined;
+      if (!actionDict) continue;
+
+      const script = PDFJavaScriptAction.of(
+        actionDict,
+        this,
+        actionObj instanceof PDFRef ? actionObj : undefined,
+      )?.getScript();
+      if (!script) continue;
+
+      scripts.push({ name, script });
+    }
+
+    return scripts;
+  }
+
+  /**
+   * Get all JavaScript from XFA form template.
+   * XFA forms can contain JavaScript in <script> elements within the template XML.
+   * For example:
+   * ```js
+   * const xfaScripts = pdfDoc.getXFAJavaScripts()
+   * xfaScripts.forEach(({ field, event, script }) => {
+   *   console.log(`Field "${field}" on ${event}:`, script)
+   * })
+   * ```
+   *
+   * **Note:** load the document with `preserveXFA: true` and call this before
+   * [[getForm]], which strips XFA data when `preserveXFA` is not set.
+   *
+   * @returns An array of objects containing field names, events, and JavaScript code.
+   */
+  getXFAJavaScripts(): Array<{ field: string; event: string; script: string }> {
+    // Avoid [[getForm]] (strips XFA) and formCache.access() (creates AcroForm).
+    return this.getExistingForm()?.getXFAJavaScripts() ?? [];
+  }
+
+  /**
+   * Modify JavaScript in XFA form template for a specific field and event.
+   * For example:
+   * ```js
+   * pdfDoc.setXFAJavaScript('import', 'event__click', 'console.println("Modified!");')
+   * ```
+   * @param fieldName The name of the field containing the script
+   * @param eventName The name of the event (e.g., 'event__click', 'calculate')
+   * @param newScript The new JavaScript code to set
+   * @throws Error if the XFA form is not found, the script location is not found, or decoding fails
+   *
+   * **Note:** load the document with `preserveXFA: true` and call this before
+   * [[getForm]], which strips XFA data when `preserveXFA` is not set.
+   */
+  setXFAJavaScript(
+    fieldName: string,
+    eventName: string,
+    newScript: string,
+  ): void {
+    const form = this.getExistingForm();
+    if (!form) {
+      throw new Error(
+        'XFA form not found in document. Ensure the document has XFA forms and was loaded with preserveXFA: true.',
+      );
+    }
+    form.setXFAJavaScript(fieldName, eventName, newScript);
+  }
+
+  /**
    * Add an attachment to this document. Attachments are visible in the
    * "Attachments" panel of Adobe Acrobat and some other PDF readers. Any
    * type of file can be added as an attachment. This includes, but is not
@@ -1031,11 +1304,15 @@ export default class PDFDocument {
    * @returns Resolves when the attachment is complete.
    */
   async attach(
-    attachment: string | Uint8Array | ArrayBuffer,
+    attachment: BinaryData,
     name: string,
     options: AttachmentOptions = {},
   ): Promise<void> {
-    assertIs(attachment, 'attachment', ['string', Uint8Array, ArrayBuffer]);
+    assertIs(attachment, 'attachment', [
+      'string',
+      ArrayBuffer,
+      'ArrayBufferView',
+    ]);
     assertIs(name, 'name', ['string']);
     assertOrUndefined(options.mimeType, 'mimeType', ['string']);
     assertOrUndefined(options.description, 'description', ['string']);
@@ -1257,12 +1534,12 @@ export default class PDFDocument {
    * @returns Resolves with the embedded font.
    */
   async embedFont(
-    font: StandardFonts | string | Uint8Array | ArrayBuffer,
+    font: StandardFonts | BinaryData,
     options: EmbedFontOptions = {},
   ): Promise<PDFFont> {
     const { subset = false, customName, features } = options;
 
-    assertIs(font, 'font', ['string', Uint8Array, ArrayBuffer]);
+    assertIs(font, 'font', ['string', ArrayBuffer, 'ArrayBufferView']);
     assertIs(subset, 'subset', ['boolean']);
 
     let embedder: CustomFontEmbedder | StandardFontEmbedder;
@@ -1281,7 +1558,7 @@ export default class PDFDocument {
         : await CustomFontEmbedder.for(fontkit, bytes, customName, features);
     } else {
       throw new TypeError(
-        '`font` must be one of `StandardFonts | string | Uint8Array | ArrayBuffer`',
+        '`font` must be one of `StandardFonts | string | ArrayBuffer | ArrayBufferView`',
       );
     }
 
@@ -1348,8 +1625,8 @@ export default class PDFDocument {
    * @param jpg The input data for a JPEG image.
    * @returns Resolves with the embedded image.
    */
-  async embedJpg(jpg: string | Uint8Array | ArrayBuffer): Promise<PDFImage> {
-    assertIs(jpg, 'jpg', ['string', Uint8Array, ArrayBuffer]);
+  async embedJpg(jpg: BinaryData): Promise<PDFImage> {
+    assertIs(jpg, 'jpg', ['string', ArrayBuffer, 'ArrayBufferView']);
     const bytes = toUint8Array(jpg);
     const embedder = await JpegEmbedder.for(bytes);
     const ref = this.context.nextRef();
@@ -1388,8 +1665,8 @@ export default class PDFDocument {
    * @param png The input data for a PNG image.
    * @returns Resolves with the embedded image.
    */
-  async embedPng(png: string | Uint8Array | ArrayBuffer): Promise<PDFImage> {
-    assertIs(png, 'png', ['string', Uint8Array, ArrayBuffer]);
+  async embedPng(png: BinaryData): Promise<PDFImage> {
+    assertIs(png, 'png', ['string', ArrayBuffer, 'ArrayBufferView']);
     const bytes = toUint8Array(png);
     const embedder = await PngEmbedder.for(bytes);
     const ref = this.context.nextRef();
@@ -1449,13 +1726,13 @@ export default class PDFDocument {
    * @returns Resolves with an array of the embedded pages.
    */
   async embedPdf(
-    pdf: string | Uint8Array | ArrayBuffer | PDFDocument,
+    pdf: BinaryData | PDFDocument,
     indices: number[] = [0],
   ): Promise<PDFEmbeddedPage[]> {
     assertIs(pdf, 'pdf', [
       'string',
-      Uint8Array,
       ArrayBuffer,
+      'ArrayBufferView',
       [PDFDocument, 'PDFDocument'],
     ]);
     assertIs(indices, 'indices', [Array]);
@@ -1593,6 +1870,13 @@ export default class PDFDocument {
   }
 
   encrypt(options: SecurityOptions) {
+    // PDF/A forbids encryption — refuse when the catalog already claims PDF/A.
+    if (readCatalogPDFAConformance(this.catalog)) {
+      throw new Error(
+        'Cannot encrypt a PDF/A document: PDF/A forbids encryption. A file ' +
+          'cannot be both encrypted and PDF/A compliant.',
+      );
+    }
     this.context.security = PDFSecurity.create(this.context, options).encrypt();
   }
 
@@ -1630,10 +1914,14 @@ export default class PDFDocument {
    * @param options The options to be used when saving the document.
    * @returns Resolves with the bytes of the serialized document.
    */
-  async save(options: SaveOptions = {}): Promise<Uint8Array> {
+  async save(options: SaveOptions = {}) {
     const vparts = this.context.header.getVersionString().split('.');
+    const pdfaPart = readCatalogPDFAConformance(this.catalog)?.part;
     const uOS =
-      options.rewrite || Number(vparts[0]) > 1 || Number(vparts[1]) >= 5;
+      // PDF/A-1 forbids object and cross-reference streams, so never enable
+      // them by default when targeting that part.
+      pdfaPart !== 1 &&
+      (options.rewrite || Number(vparts[0]) > 1 || Number(vparts[1]) >= 5);
     const {
       useObjectStreams = uOS,
       addDefaultPage = true,
@@ -1647,6 +1935,28 @@ export default class PDFDocument {
     assertIs(objectsPerTick, 'objectsPerTick', ['number']);
     assertIs(updateFieldAppearances, 'updateFieldAppearances', ['boolean']);
     assertIs(rewrite, 'rewrite', ['boolean']);
+
+    if (pdfaPart === 1 && useObjectStreams) {
+      throw new Error(
+        'PDF/A-1 forbids object and cross-reference streams. ' +
+          'Save with useObjectStreams: false (the default for PDF/A-1).',
+      );
+    }
+
+    // Object streams require PDF >= 1.5. If a loaded document still advertises
+    // an older header (e.g. 1.3/1.4) but we are about to emit ObjStm — typically
+    // via `rewrite: true` — bump the header so the declared version matches the
+    // features we write.
+    if (useObjectStreams) {
+      const [maj, min] = this.context.header
+        .getVersionString()
+        .split('.')
+        .map(Number);
+      if (maj < 1 || (maj === 1 && min < 5)) {
+        this.context.header = PDFHeader.forVersion(1, 7);
+      }
+    }
+
     const incrementalUpdate =
       !rewrite &&
       this.context.pdfFileDetails.originalBytes &&
@@ -1699,13 +2009,22 @@ export default class PDFDocument {
   async saveIncremental(
     snapshot: DocumentSnapshot,
     options: IncrementalSaveOptions = {},
-  ): Promise<Uint8Array> {
+  ) {
     // check PDF version
     const vparts = this.context.header.getVersionString().split('.');
-    const uOS = Number(vparts[0]) > 1 || Number(vparts[1]) >= 5;
+    const pdfaPart = readCatalogPDFAConformance(this.catalog)?.part;
+    const uOS =
+      pdfaPart !== 1 && (Number(vparts[0]) > 1 || Number(vparts[1]) >= 5);
     const { objectsPerTick = 50 } = options;
 
     assertIs(objectsPerTick, 'objectsPerTick', ['number']);
+
+    if (pdfaPart === 1 && options.useObjectStreams === true) {
+      throw new Error(
+        'PDF/A-1 forbids object and cross-reference streams. ' +
+          'Save with useObjectStreams: false (the default for PDF/A-1).',
+      );
+    }
 
     const saveOptions: SaveOptions = {
       useObjectStreams: uOS,
@@ -1796,7 +2115,7 @@ export default class PDFDocument {
    * @param options The options to be used when committing changes.
    * @returns Resolves with the complete PDF bytes including all updates.
    */
-  async commit(options: IncrementalSaveOptions = {}): Promise<Uint8Array> {
+  async commit(options: IncrementalSaveOptions = {}) {
     if (!this.context.snapshot || !this.context.pdfFileDetails.originalBytes) {
       throw new Error(
         'commit() requires the document to be loaded with forIncrementalUpdate: true',
@@ -1846,6 +2165,9 @@ export default class PDFDocument {
       if (form) form.updateFieldAppearances();
     }
 
+    // Keep Info dict and XMP Metadata equivalent, as required by PDF/A.
+    this.syncPDFAMetadata();
+
     await this.flush();
   }
 
@@ -1866,6 +2188,65 @@ export default class PDFDocument {
 
     if (!info.get(PDFName.of('Creator'))) this.setCreator(pdfLib);
     if (!info.get(PDFName.of('CreationDate'))) this.setCreationDate(now);
+  }
+
+  /**
+   * Rebuild the catalog `/Metadata` XMP packet when this document is under
+   * PDF/A metadata management: owned Info/`pdfaid` projection, plus any foreign
+   * `rdf:Description` blocks already present (and optional one-shot extras).
+   *
+   * @param conformance Explicit part/level when writing before catalog XMP
+   * exists (or when changing it). Otherwise read from catalog.
+   */
+  private syncPDFAMetadata(
+    extraExtensions?: string[],
+    conformance?: ParsedConformance,
+  ): void {
+    if (!this.managePDFAMetadata) return;
+
+    const conf = conformance ?? readCatalogPDFAConformance(this.catalog);
+    if (!conf) return;
+
+    const existingXml = readCatalogMetadataXml(this.catalog);
+    const preserved = existingXml
+      ? extractForeignXmpDescriptions(existingXml)
+      : [];
+    const extensions = mergeXmpExtensionFragments(extraExtensions, preserved);
+
+    const metadataXML = buildPDFAMetadata({
+      conformance: conf,
+      title: this.getTitle(),
+      author: this.getAuthor(),
+      subject: this.getSubject(),
+      keywords: this.getKeywords(),
+      creator: this.getCreator(),
+      producer: this.getProducer(),
+      creationDate: this.getCreationDate(),
+      modificationDate: this.getModificationDate(),
+      extensions,
+    });
+
+    this.writeCatalogMetadataXml(metadataXML);
+  }
+
+  private writeCatalogMetadataXml(metadataXML: string): void {
+    // Unfiltered UTF-8 stream so validators can read XMP without decompressing.
+    const metadataStream = this.context.stream(utf8Encode(metadataXML, false), {
+      Type: 'Metadata',
+      Subtype: 'XML',
+    });
+
+    const metaKey = PDFName.of('Metadata');
+    const existingRef = this.catalog.get(metaKey);
+    if (existingRef instanceof PDFRef) {
+      // Reuse the catalog ref so repeated saves do not orphan Metadata streams.
+      this.context.assign(existingRef, metadataStream);
+      if (this.context.snapshot) {
+        this.context.snapshot.markRefForSave(existingRef);
+      }
+    } else {
+      this.catalog.set(metaKey, this.context.register(metadataStream));
+    }
   }
 
   private getInfoDict(): PDFDict {
@@ -1902,6 +2283,20 @@ export default class PDFDocument {
     const acroForm = this.catalog.getOrCreateAcroForm();
     return PDFForm.of(acroForm, this);
   };
+
+  /**
+   * Return an existing [[PDFForm]] without creating an AcroForm or stripping XFA.
+   * Prefers the form cache when already populated; otherwise wraps a catalog
+   * AcroForm if one is already present.
+   */
+  private getExistingForm(): PDFForm | undefined {
+    const cached = this.formCache.getValue();
+    if (cached) return cached;
+
+    const acroForm = this.catalog.getAcroForm();
+    if (!acroForm) return undefined;
+    return PDFForm.of(acroForm, this);
+  }
 }
 
 /* tslint:disable-next-line only-arrow-functions */

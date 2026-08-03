@@ -1,4 +1,4 @@
-import fontkit from '@pdf-lib/fontkit';
+import fontkit from 'fontkit';
 import fs from 'fs';
 import {
   EncryptedPDFError,
@@ -19,6 +19,7 @@ import {
   AFRelationship,
 } from '../../src/index';
 import { PDFAttachment } from '../../src/api/PDFDocument';
+import { PDFHeader } from '../../src/core';
 
 const examplePngImageBase64 =
   'iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAABhGlDQ1BJQ0MgcHJvZmlsZQAAKJF9kT1Iw0AcxV9TxaoVBzuIdMhQnSyIijhKFYtgobQVWnUwufQLmjQkKS6OgmvBwY/FqoOLs64OroIg+AHi5uak6CIl/i8ptIjx4Lgf7+497t4BQqPCVLNrAlA1y0jFY2I2tyr2vKIfAgLoRVhipp5IL2bgOb7u4ePrXZRneZ/7cwwoeZMBPpF4jumGRbxBPLNp6Zz3iUOsJCnE58TjBl2Q+JHrsstvnIsOCzwzZGRS88QhYrHYwXIHs5KhEk8TRxRVo3wh67LCeYuzWqmx1j35C4N5bSXNdZphxLGEBJIQIaOGMiqwEKVVI8VEivZjHv4Rx58kl0yuMhg5FlCFCsnxg//B727NwtSkmxSMAd0vtv0xCvTsAs26bX8f23bzBPA/A1da219tALOfpNfbWuQIGNwGLq7bmrwHXO4Aw0+6ZEiO5KcpFArA+xl9Uw4YugX61tzeWvs4fQAy1NXyDXBwCIwVKXvd492Bzt7+PdPq7wcdn3KFLu4iBAAAAAZiS0dEAP8A/wD/oL2nkwAAAAlwSFlzAAALEwAACxMBAJqcGAAAAlFJREFUeNrt289r02AYB/Dvk6Sl4EDKpllTlFKsnUdBHXgUBEHwqHj2IJ72B0zwKHhxJ08i/gDxX/AiRfSkBxELXTcVxTa2s2xTsHNN8ngQbQL70RZqG/Z9b29JnvflkydP37whghG3ZaegoxzfwB5vBCAAAQhAAAIQgAAEIAABCEAAAhCAAAQgwB5rstWPtnP0LqBX/vZNyLF6vVrpN/hucewhb4g+B2AyAwiwY7NGOXijviS9vBeYh6CEP4edBLDADCAAAQhAAAIQgAAEIAABCDAUAFF/GIN1DM+PBYCo/ohMXDQ1WPjoeUZH1mMBEEh0oqLGvsHCy0S4NzWVWotJBogbvZB+brDwQT7UWSmXy5sxyQB9HQEROdVv4HQ+vx+QmS4iXsWmCK7Usu8AhOqAXMzlcn3VgWTbugQgEYrxMkZ/gyUPgnuhe2C6/Stxvdeg2ezMJERvhOuoZ+JBrNYBRuDdBtDuXkDM25nCHLbZSv9X6A4VHU+DpwCcbvbjcetLtTaOANtuirrux08HM0euisjDEMKC7RQuq+C+pVJqpzx3NZ3+eeBza9I0rWJgyHnxg2sAJrqnaHUzFcyN60Jox13hprv8aNopZBS4GcqWWVHM+lAkN0zY7ncgkYBukRoKLPpiXVj9UFkfV4Bdl8Jf60u3IMZZAG/6iLuhkDvaSZ74VqtUx3kp3NN7gUZt8RmA43a2eEY1OCfQ04AcBpAGkAKwpkBLIG8BfQE/eNJsvG/G4VlARj0BfjDBx2ECEIAABCAAAQhAAAIQgAAE+P/tN8YvpvbTDBOlAAAAAElFTkSuQmCC';
@@ -199,6 +200,29 @@ describe('PDFDocument', () => {
       });
       expect(pdfUpdDoc.context.largestObjectNumber).toBe(334);
     });
+
+    it('keeps largestObjectNumber across linearized sections with smaller final Size', async () => {
+      const pdfBytes = fs.readFileSync(
+        './assets/pdfs/linearized_with_object_streams.pdf',
+      );
+      const pdfUpdDoc = await PDFDocument.load(pdfBytes, {
+        forIncrementalUpdate: true,
+        updateMetadata: false,
+      });
+
+      const finalSize = pdfUpdDoc.context.trailerInfo.Size!.asNumber();
+      // This fixture's final trailer Size is lower than the true max object number.
+      // largestObjectNumber must not be collapsed to that smaller Size-1.
+      expect(pdfUpdDoc.context.largestObjectNumber).toBeGreaterThan(
+        finalSize - 1,
+      );
+      expect(pdfUpdDoc.context.largestObjectNumber).toBe(85334);
+
+      // The final XRef stream omits Root/Info/ID; they must be kept from earlier sections.
+      expect(pdfUpdDoc.context.trailerInfo.Root).toBeTruthy();
+      expect(pdfUpdDoc.context.trailerInfo.Info).toBeTruthy();
+      expect(pdfUpdDoc.context.trailerInfo.ID).toBeTruthy();
+    }, 30000);
   });
 
   describe('embedFont() method', () => {
@@ -1807,8 +1831,8 @@ describe('PDFDocument', () => {
           useObjectStreams: false,
         });
         const finalPdfBytes = Buffer.concat([
-          simplePdfBytes,
-          pdfIncrementalBytes,
+          Uint8Array.from(simplePdfBytes),
+          Uint8Array.from(pdfIncrementalBytes),
         ]);
         const pdfSaveBytes = Buffer.from(
           await pdfDoc.save({ useObjectStreams: false }),
@@ -2188,8 +2212,8 @@ describe('PDFDocument', () => {
 
         const pdfIncrementalBytes = await pdfDoc.saveIncremental(snapshot);
         const finalPdfBytes = Buffer.concat([
-          simplePdfBytes,
-          pdfIncrementalBytes,
+          Uint8Array.from(simplePdfBytes),
+          Uint8Array.from(pdfIncrementalBytes),
         ]);
         const pdfSaveBytes = await pdfDoc.save();
         expect(pdfIncrementalBytes.byteLength).toBeGreaterThan(0);
@@ -2200,6 +2224,119 @@ describe('PDFDocument', () => {
 
       await expect(noErrorFunc(0)).resolves.not.toThrowError();
       await expect(noErrorFunc(1)).resolves.not.toThrowError();
+    });
+  });
+
+  describe('getDocumentJavaScripts() method', () => {
+    it('returns empty array when no JavaScript exists', async () => {
+      const pdfDoc = await PDFDocument.create();
+      const scripts = pdfDoc.getDocumentJavaScripts();
+      expect(scripts).toEqual([]);
+    });
+
+    it('can extract document-level JavaScript', async () => {
+      const pdfDoc = await PDFDocument.create();
+      pdfDoc.addJavaScript('script1', 'console.println("Test 1");');
+      pdfDoc.addJavaScript('script2', 'console.println("Test 2");');
+
+      await pdfDoc.flush();
+
+      const scripts = pdfDoc.getDocumentJavaScripts();
+
+      expect(scripts).toHaveLength(2);
+      expect(scripts[0].name).toBe('script1');
+      expect(scripts[0].script).toBe('console.println("Test 1");');
+      expect(scripts[1].name).toBe('script2');
+      expect(scripts[1].script).toBe('console.println("Test 2");');
+    });
+
+    it('can extract JavaScript from loaded PDF', async () => {
+      const pdfDoc1 = await PDFDocument.create();
+      pdfDoc1.addJavaScript('test', 'console.show();');
+      const savedBytes = await pdfDoc1.save();
+
+      const pdfDoc2 = await PDFDocument.load(savedBytes);
+      const scripts = pdfDoc2.getDocumentJavaScripts();
+
+      expect(scripts).toHaveLength(1);
+      expect(scripts[0].name).toBe('test');
+      expect(scripts[0].script).toBe('console.show();');
+    });
+  });
+
+  describe('preserveXFA option', () => {
+    it('deletes XFA by default', async () => {
+      const pdfDoc1 = await PDFDocument.create();
+      const form = pdfDoc1.getForm();
+
+      // Manually add XFA data
+      form.acroForm.dict.set(
+        PDFName.of('XFA'),
+        PDFArray.withContext(pdfDoc1.context),
+      );
+
+      const savedBytes = await pdfDoc1.save();
+
+      // Load without preserveXFA
+      const consoleWarnSpy = jest.spyOn(console, 'warn').mockImplementation();
+      const pdfDoc2 = await PDFDocument.load(savedBytes);
+      const form2 = pdfDoc2.getForm();
+
+      expect(form2.hasXFA()).toBe(false);
+      expect(consoleWarnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('Removing XFA form data'),
+      );
+
+      consoleWarnSpy.mockRestore();
+    });
+
+    it('preserves XFA when preserveXFA is true', async () => {
+      const pdfDoc1 = await PDFDocument.create();
+      const form = pdfDoc1.getForm();
+
+      // Manually add XFA data
+      form.acroForm.dict.set(
+        PDFName.of('XFA'),
+        PDFArray.withContext(pdfDoc1.context),
+      );
+
+      const savedBytes = await pdfDoc1.save();
+
+      // Load with preserveXFA
+      const pdfDoc2 = await PDFDocument.load(savedBytes, { preserveXFA: true });
+      const form2 = pdfDoc2.getForm();
+
+      expect(form2.hasXFA()).toBe(true);
+    });
+  });
+
+  describe('save() PDF header version', () => {
+    it('bumps the header when rewriting a pre-1.5 document with object streams', async () => {
+      const pdfDoc = await PDFDocument.create({ updateMetadata: false });
+      pdfDoc.context.header = PDFHeader.forVersion(1, 3);
+      pdfDoc.addPage();
+
+      const bytes = await pdfDoc.save({ rewrite: true });
+      const text = Buffer.from(bytes).toString('latin1');
+
+      // PDFStreamWriter emits a cross-reference stream (PDF 1.5+); the header
+      // must be raised to match.
+      expect(pdfDoc.context.header.getVersionString()).toBe('1.7');
+      expect(text).toContain('%PDF-1.7');
+      expect(text).toContain('/Type /XRef');
+    });
+
+    it('preserves a pre-1.5 header when object streams are not used', async () => {
+      const pdfDoc = await PDFDocument.create({ updateMetadata: false });
+      pdfDoc.context.header = PDFHeader.forVersion(1, 4);
+      pdfDoc.addPage();
+
+      const bytes = await pdfDoc.save({ useObjectStreams: false });
+      const text = Buffer.from(bytes).toString('latin1');
+
+      expect(pdfDoc.context.header.getVersionString()).toBe('1.4');
+      expect(text).toContain('%PDF-1.4');
+      expect(text).not.toContain('/Type /XRef');
     });
   });
 

@@ -35,16 +35,43 @@ import {
   PDFAcroPushButton,
   PDFAcroNonTerminal,
   PDFDict,
-  PDFOperator,
   PDFRef,
   createPDFAcroFields,
   PDFName,
   PDFWidgetAnnotation,
 } from '../../core';
 import { assertIs, Cache, assertOrUndefined } from '../../utils';
+import { encode } from 'html-entities';
+import {
+  collectXfaScripts,
+  collectXfaSignatures,
+  parseXfaTemplate,
+  readXfaTemplatePacket,
+} from './xfa';
 
 export interface FlattenOptions {
   updateFieldAppearances: boolean;
+}
+
+/**
+ * Describes a signature field declared inside an XFA form template.
+ */
+export interface XFASignatureField {
+  field: string;
+  manifest: string | null;
+  refs: string[];
+}
+
+/**
+ * Describes a signature field found in a [[PDFDocument]], regardless of whether
+ * it is declared in the AcroForm `/Fields` array or inside an XFA template.
+ */
+export interface SignatureField {
+  name: string;
+  source: 'acroform' | 'xfa';
+  acroField?: PDFSignature;
+  manifest?: string | null;
+  refs?: string[];
 }
 
 /**
@@ -309,6 +336,224 @@ export default class PDFForm {
   }
 
   /**
+   * Get the signature fields declared inside this form's XFA template (if any).
+   *
+   * Dynamic XFA forms declare signature fields inside the template XML rather
+   * than in the AcroForm `/Fields` array, so [[PDFForm.getSignature]] cannot
+   * see them. Each signature field carries a `<signature>` UI element that
+   * references a `<manifest>` describing which fields the signature covers (its
+   * FieldMDP scope). This method surfaces that information.
+   *
+   * For example:
+   * ```js
+   * const form = pdfDoc.getForm()
+   * form.getXFASignatures().forEach(({ field, manifest, refs }) => {
+   *   console.log(`Signature "${field}" (manifest ${manifest}) covers`, refs)
+   * })
+   * ```
+   *
+   * @returns An array of [[XFASignatureField]] objects, one per XFA signature field.
+   */
+  getXFASignatures(): XFASignatureField[] {
+    const result: XFASignatureField[] = [];
+    if (!this.hasXFA()) return result;
+
+    try {
+      const packet = readXfaTemplatePacket(this.acroForm.dict);
+      if (!packet) return result;
+
+      const { signatures, manifests } = collectXfaSignatures(
+        parseXfaTemplate(packet.xml),
+      );
+
+      for (const sig of signatures) {
+        const refs =
+          sig.manifestUse && manifests.has(sig.manifestUse)
+            ? manifests.get(sig.manifestUse)!
+            : sig.inlineRefs;
+        result.push({
+          field: sig.field,
+          manifest: sig.manifestUse ?? null,
+          refs,
+        });
+      }
+    } catch (error) {
+      if (error instanceof Error) {
+        throw new Error(`Failed to parse XFA template: ${error.message}`);
+      }
+      throw error;
+    }
+
+    return result;
+  }
+
+  /**
+   * Get all signature fields in this form, including both AcroForm signature
+   * fields and signature fields declared inside an XFA template.
+   * For example:
+   * ```js
+   * const form = pdfDoc.getForm()
+   * const sigFields = form.getSignatureFields()
+   * sigFields.forEach(({ name, source }) => {
+   *   console.log(`${source} signature field: ${name}`)
+   * })
+   * ```
+   *
+   * @returns An array of [[SignatureField]] describing every signature
+   *          field, whether it originates from the AcroForm or from XFA.
+   */
+  getSignatureFields(): SignatureField[] {
+    const results: SignatureField[] = [];
+
+    for (const field of this.getFields()) {
+      if (field instanceof PDFSignature) {
+        results.push({
+          name: field.getName(),
+          source: 'acroform',
+          acroField: field,
+        });
+      }
+    }
+
+    for (const xfaSig of this.getXFASignatures()) {
+      results.push({
+        name: xfaSig.field,
+        source: 'xfa',
+        manifest: xfaSig.manifest,
+        refs: xfaSig.refs,
+      });
+    }
+
+    return results;
+  }
+
+  /**
+   * Get all JavaScript from this form's XFA template.
+   * XFA forms can contain JavaScript in `<script>` elements within the template XML.
+   * For example:
+   * ```js
+   * const form = pdfDoc.getForm()
+   * const xfaScripts = form.getXFAJavaScripts()
+   * xfaScripts.forEach(({ field, event, script }) => {
+   *   console.log(`Field "${field}" on ${event}:`, script)
+   * })
+   * ```
+   *
+   * **Note:** load the document with `preserveXFA: true`. Prefer calling via
+   * [[PDFDocument.getXFAJavaScripts]] before [[PDFDocument.getForm]] when
+   * `preserveXFA` is not set, since `getForm()` strips XFA data otherwise.
+   *
+   * @returns An array of objects containing field names, events, and JavaScript code.
+   */
+  getXFAJavaScripts(): Array<{ field: string; event: string; script: string }> {
+    const scripts: Array<{ field: string; event: string; script: string }> = [];
+
+    try {
+      const packet = readXfaTemplatePacket(this.acroForm.dict);
+      if (!packet) return scripts;
+
+      for (const entry of collectXfaScripts(parseXfaTemplate(packet.xml))) {
+        const scriptContent = entry.scriptNode.text?.trim();
+        if (scriptContent) {
+          scripts.push({
+            field: entry.field,
+            event: entry.event,
+            script: scriptContent,
+          });
+        }
+      }
+    } catch (error) {
+      if (error instanceof Error) {
+        if (error.message.includes('decode')) {
+          throw new Error(
+            `Failed to decode XFA template stream: Invalid UTF-8 encoding. ${error.message}`,
+          );
+        }
+        throw new Error(`Failed to parse XFA template: ${error.message}`);
+      }
+      throw error;
+    }
+
+    return scripts;
+  }
+
+  /**
+   * Modify JavaScript in this form's XFA template for a specific field and event.
+   * For example:
+   * ```js
+   * const form = pdfDoc.getForm()
+   * form.setXFAJavaScript('import', 'event__click', 'console.println("Modified!");')
+   * ```
+   * @param fieldName The name of the field containing the script
+   * @param eventName The name of the event (e.g., 'event__click', 'calculate')
+   * @param newScript The new JavaScript code to set
+   * @throws Error if the XFA form is not found, the script location is not found, or decoding fails
+   *
+   * **Note:** load the document with `preserveXFA: true`. Prefer calling via
+   * [[PDFDocument.setXFAJavaScript]] before [[PDFDocument.getForm]] when
+   * `preserveXFA` is not set, since `getForm()` strips XFA data otherwise.
+   */
+  setXFAJavaScript(
+    fieldName: string,
+    eventName: string,
+    newScript: string,
+  ): void {
+    let packet;
+    try {
+      packet = readXfaTemplatePacket(this.acroForm.dict);
+    } catch (error) {
+      throw new Error(
+        `Failed to decode XFA template stream: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+
+    if (!packet) {
+      throw new Error(
+        'XFA form not found in document. Ensure the document has XFA forms and was loaded with preserveXFA: true.',
+      );
+    }
+
+    const doc = parseXfaTemplate(packet.xml);
+    const entries = collectXfaScripts(doc).filter(
+      (e) => e.field === fieldName && e.event === eventName,
+    );
+
+    if (entries.length === 0) {
+      throw new Error(
+        `Script not found for field "${fieldName}" and event "${eventName}". ` +
+          'Verify the field and event names exist in the XFA template.',
+      );
+    }
+
+    for (const entry of entries) {
+      entry.scriptNode.set_content(encode(newScript));
+    }
+
+    const context = this.acroForm.dict.context;
+    const newXmlBytes = new TextEncoder().encode(doc.toString());
+    const filter = packet.stream.dict.get(PDFName.of('Filter'));
+    const newStream =
+      filter !== undefined
+        ? context.flateStream(newXmlBytes)
+        : context.stream(newXmlBytes);
+
+    if (packet.streamRef) {
+      // Overwrite the existing template stream in place, preserving its object
+      // reference. Creating a new object and re-pointing the XFA array does not
+      // survive a save/reload for documents whose objects live in compressed
+      // object streams, because the re-emitted stale copy wins on the next load.
+      context.assign(packet.streamRef, newStream);
+      if (context.snapshot) {
+        context.snapshot.markRefForSave(packet.streamRef);
+      }
+    } else {
+      // The template was stored as a direct (inline) stream; replace the array
+      // slot with a freshly registered stream object.
+      packet.xfa.set(packet.templateIndex, context.register(newStream));
+    }
+  }
+
+  /**
    * Get the text field in this [[PDFForm]] with the given name.
    * For example:
    * ```js
@@ -549,20 +794,8 @@ export default class PDFForm {
         try {
           const widget = widgets[j];
           const page = this.findWidgetPage(widget);
-          const widgetRef = this.findWidgetAppearanceRef(field, widget);
-
-          const xObjectKey = page.node.newXObject('FlatWidget', widgetRef);
-
-          const rectangle = widget.getRectangle();
-          const operators = [
-            pushGraphicsState(),
-            translate(rectangle.x, rectangle.y),
-            ...rotateInPlace({ ...rectangle, rotation: 0 }),
-            drawObject(xObjectKey),
-            popGraphicsState(),
-          ].filter(Boolean) as PDFOperator[];
-
-          page.pushOperators(...operators);
+          const appearanceRef = this.findWidgetAppearanceRef(field, widget);
+          this.flattenWidgetOntoPage(page, widget, appearanceRef);
         } catch (err) {
           console.error(err);
         }
@@ -570,6 +803,9 @@ export default class PDFForm {
 
       this.removeField(field);
     }
+
+    // Widgets with /FT on the annot itself but missing from AcroForm.Fields
+    this.flattenOrphanWidgets();
   }
 
   /**
@@ -727,6 +963,66 @@ export default class PDFForm {
     return page;
   }
 
+  private flattenWidgetOntoPage(
+    page: PDFPage,
+    widget: PDFWidgetAnnotation,
+    appearanceRef: PDFRef,
+  ) {
+    const rectangle = widget.getRectangle();
+    const xObjectKey = page.node.newXObject('FlatWidget', appearanceRef);
+    page.pushOperators(
+      pushGraphicsState(),
+      translate(rectangle.x, rectangle.y),
+      ...rotateInPlace({ ...rectangle, rotation: 0 }),
+      drawObject(xObjectKey),
+      popGraphicsState(),
+    );
+  }
+
+  /**
+   * Flatten Widget annotations that have field properties (/FT) directly on
+   * the annot dict but are not reachable via AcroForm.Fields.
+   */
+  private flattenOrphanWidgets(): void {
+    const pages = this.doc.getPages();
+
+    for (let p = 0, pageCount = pages.length; p < pageCount; p++) {
+      const page = pages[p];
+      const annots = page.node.Annots();
+      if (!annots) continue;
+
+      const annotsToRemove: PDFRef[] = [];
+
+      for (let i = 0, len = annots.size(); i < len; i++) {
+        const annotRef = annots.get(i);
+        if (!(annotRef instanceof PDFRef)) continue;
+
+        const dict = this.doc.context.lookup(annotRef);
+        if (!(dict instanceof PDFDict)) continue;
+        if (dict.lookup(PDFName.of('Subtype')) !== PDFName.of('Widget')) {
+          continue;
+        }
+        // Self-contained field widget (kids inherit /FT from Parent)
+        if (!dict.has(PDFName.of('FT'))) continue;
+
+        try {
+          const widget = PDFWidgetAnnotation.fromDict(dict);
+          const appearanceRef = this.findOrphanWidgetAppearanceRef(widget);
+          this.flattenWidgetOntoPage(page, widget, appearanceRef);
+          annotsToRemove.push(annotRef);
+        } catch (err) {
+          console.error(err);
+        }
+      }
+
+      for (let i = 0, len = annotsToRemove.length; i < len; i++) {
+        const ref = annotsToRemove[i];
+        page.node.removeAnnot(ref);
+        this.doc.context.delete(ref);
+      }
+    }
+  }
+
   private findWidgetAppearanceRef(
     field: PDFField,
     widget: PDFWidgetAnnotation,
@@ -750,6 +1046,36 @@ export default class PDFForm {
     if (!(refOrDict instanceof PDFRef)) {
       const name = field.getName();
       throw new Error(`Failed to extract appearance ref for: ${name}`);
+    }
+
+    return refOrDict;
+  }
+
+  /** Resolve /AP/N for orphaned widgets without mutating missing appearances. */
+  private findOrphanWidgetAppearanceRef(widget: PDFWidgetAnnotation): PDFRef {
+    const n = widget.AP()?.get(PDFName.of('N'));
+    let refOrDict = n;
+
+    if (refOrDict instanceof PDFRef) {
+      const lookedUp = this.doc.context.lookup(refOrDict);
+      if (lookedUp instanceof PDFDict) refOrDict = lookedUp;
+    }
+
+    if (refOrDict instanceof PDFDict) {
+      const value = widget.dict.lookup(PDFName.of('V'));
+      const state =
+        widget.getAppearanceState() ??
+        (value instanceof PDFName ? value : undefined) ??
+        PDFName.of('Off');
+      const ref = refOrDict.get(state) ?? refOrDict.get(PDFName.of('Off'));
+      if (!(ref instanceof PDFRef)) {
+        throw new Error('Failed to extract appearance ref for orphaned widget');
+      }
+      return ref;
+    }
+
+    if (!(refOrDict instanceof PDFRef)) {
+      throw new Error('Failed to extract appearance ref for orphaned widget');
     }
 
     return refOrDict;
