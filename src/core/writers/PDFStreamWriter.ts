@@ -119,8 +119,9 @@ class PDFStreamWriter extends PDFWriter {
           (object as PDFDict).lookup(PDFName.of('Type')) === PDFName.of('Sig'));
 
       if (shouldNotCompress) {
+        // Swap in the encrypted object so its size and bytes stay consistent.
+        if (security) indirectObject[1] = this.encrypt(ref, object, security);
         uncompressedObjects.push(indirectObject);
-        if (security) this.encrypt(ref, object, security);
         xrefStream.addUncompressedEntry(ref, size);
         size += this.computeIndirectObjectSize(indirectObject);
         if (this.shouldWaitForTick(1)) await waitForTick();
@@ -150,6 +151,8 @@ class PDFStreamWriter extends PDFWriter {
       );
       this.context.assign(ref, objectStream);
 
+      // Objects held in an object stream are never encrypted individually; only
+      // the object stream's own contents are, using the object stream's key.
       if (security) this.encrypt(ref, objectStream, security);
 
       xrefStream.addUncompressedEntry(ref, size);

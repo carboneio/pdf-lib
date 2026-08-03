@@ -1,5 +1,12 @@
 # Changelog
 
+## v2.8.0
+
+- Fixed password encryption so document properties (Info dictionary strings such as Title, Author, Subject) are encrypted when `StrF` is set, and correctly decrypted when loading encrypted PDFs (including those that use object streams / XRef streams). Encrypted files now interoperate with viewers and tools such as Chrome, Preview, pdfinfo, and qpdf.
+- Fixed encryption of strings that are stored as indirect objects, which were previously written in plaintext.
+- The signed contents (`/Contents`) of a signature dictionary are no longer encrypted, as required by ISO 32000-2.
+- Only the trailer / cross-reference stream file identifier is exempt from encryption. An `/ID` entry in any other dictionary is now encrypted like any other string.
+
 ## v2.7.0
 
 - switch to npm + fix npm install by updating eslint dependencies

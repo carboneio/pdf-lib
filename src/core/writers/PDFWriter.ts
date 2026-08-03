@@ -2,13 +2,16 @@ import PDFCrossRefSection from '../document/PDFCrossRefSection';
 import PDFHeader from '../document/PDFHeader';
 import PDFTrailer from '../document/PDFTrailer';
 import PDFTrailerDict from '../document/PDFTrailerDict';
+import PDFArray from '../objects/PDFArray';
 import PDFDict from '../objects/PDFDict';
+import PDFHexString from '../objects/PDFHexString';
 import PDFObject from '../objects/PDFObject';
 import PDFRef from '../objects/PDFRef';
 import PDFStream from '../objects/PDFStream';
+import PDFString from '../objects/PDFString';
 import PDFContext from '../PDFContext';
 import PDFObjectStream from '../structures/PDFObjectStream';
-import PDFSecurity from '../security/PDFSecurity';
+import PDFSecurity, { EncryptFn } from '../security/PDFSecurity';
 import CharCodes from '../syntax/CharCodes';
 import { copyStringIntoBuffer, waitForTick } from '../../utils';
 import {
@@ -232,7 +235,8 @@ class PDFWriter {
       if (!this.shouldSave(incremental, ref.objectNumber, indirectObjects)) {
         continue;
       }
-      if (security) this.encrypt(ref, object, security);
+      // Swap in the encrypted object so its size and bytes stay consistent.
+      if (security) indirectObject[1] = this.encrypt(ref, object, security);
       xref.addEntry(ref, size);
       size += this.computeIndirectObjectSize(indirectObject);
       if (this.shouldWaitForTick(1)) await waitForTick();
@@ -264,15 +268,82 @@ class PDFWriter {
     return { size, header, indirectObjects, xref, trailerDict, trailer };
   }
 
-  protected encrypt(ref: PDFRef, object: PDFObject, security: PDFSecurity) {
+  /**
+   * Returns the encrypted form of `object`, which for streams, dictionaries and
+   * arrays is `object` itself, encrypted in place.
+   *
+   * Encrypting in place means an already encrypted document must not be saved a
+   * second time: the second save would encrypt the same bytes again.
+   */
+  protected encrypt(
+    ref: PDFRef,
+    object: PDFObject,
+    security: PDFSecurity,
+  ): PDFObject {
+    // The Encrypt dictionary itself is never encrypted.
+    if (ref === this.context.trailerInfo.Encrypt) return object;
+
+    // A cross-reference stream is written in the clear, like a plain trailer,
+    // so neither its contents nor the strings in its dictionary are encrypted.
+    if (
+      object instanceof PDFStream &&
+      object.dict.lookup(PDFName.of('Type')) === PDFName.of('XRef')
+    ) {
+      return object;
+    }
+
+    const encryptFn = security.getEncryptFn(
+      ref.objectNumber,
+      ref.generationNumber,
+    );
+
     if (object instanceof PDFStream) {
-      const encryptFn = security.getEncryptFn(
-        ref.objectNumber,
-        ref.generationNumber,
-      );
-      const unencryptedContents = object.getContents();
-      const encryptedContents = encryptFn(unencryptedContents);
-      object.updateContents(encryptedContents);
+      object.updateContents(encryptFn(object.getContents()));
+      this.encryptStringsInObject(object.dict, encryptFn);
+      return object;
+    }
+
+    // Strings are immutable, so an indirect string is replaced rather than
+    // updated. The caller must use the returned object.
+    if (object instanceof PDFString || object instanceof PDFHexString) {
+      return PDFHexString.fromBytes(encryptFn(object.asBytes()));
+    }
+
+    this.encryptStringsInObject(object, encryptFn);
+    return object;
+  }
+
+  private encryptStringsInObject(
+    object: PDFObject,
+    encryptFn: EncryptFn,
+  ): void {
+    if (object instanceof PDFDict) {
+      // The signed contents of a signature dictionary are exempt from
+      // encryption.
+      const isSignature =
+        object.lookup(PDFName.of('Type')) === PDFName.of('Sig');
+
+      for (const [key, value] of object.entries()) {
+        if (isSignature && key === PDFName.of('Contents')) continue;
+
+        if (value instanceof PDFString || value instanceof PDFHexString) {
+          object.set(key, PDFHexString.fromBytes(encryptFn(value.asBytes())));
+        } else if (value instanceof PDFDict || value instanceof PDFArray) {
+          this.encryptStringsInObject(value, encryptFn);
+        }
+      }
+      return;
+    }
+
+    if (object instanceof PDFArray) {
+      for (let idx = 0, len = object.size(); idx < len; idx++) {
+        const value = object.get(idx);
+        if (value instanceof PDFString || value instanceof PDFHexString) {
+          object.set(idx, PDFHexString.fromBytes(encryptFn(value.asBytes())));
+        } else if (value instanceof PDFDict || value instanceof PDFArray) {
+          this.encryptStringsInObject(value, encryptFn);
+        }
+      }
     }
   }
 

@@ -46,6 +46,8 @@ class PDFObjectParser extends BaseParser {
 
   protected readonly context: PDFContext;
   private readonly cryptoFactory?: CipherTransformFactory;
+  /** When true, literal/hex strings are not decrypted (e.g. trailer /ID). */
+  private suppressDecryption = false;
 
   constructor(
     byteStream: ByteStream,
@@ -111,15 +113,13 @@ class PDFObjectParser extends BaseParser {
     }
     this.bytes.assertNext(CharCodes.GreaterThan);
 
-    if (this.cryptoFactory && ref) {
+    if (this.cryptoFactory && ref && !this.suppressDecryption) {
       const transformer = this.cryptoFactory.createCipherTransform(
         ref.objectNumber,
         ref.generationNumber,
       );
-      const arr = transformer.decryptBytes(PDFHexString.of(value).asBytes());
-      value = arr.reduce(
-        (str: string, byte: number) => str + byte.toString(16).padStart(2, '0'),
-        '',
+      return PDFHexString.fromBytes(
+        transformer.decryptBytes(PDFHexString.of(value).asBytes()),
       );
     }
 
@@ -152,7 +152,7 @@ class PDFObjectParser extends BaseParser {
       if (nestingLvl === 0) {
         let actualValue = value.substring(1, value.length - 1);
 
-        if (this.cryptoFactory && ref) {
+        if (this.cryptoFactory && ref && !this.suppressDecryption) {
           const transformer = this.cryptoFactory.createCipherTransform(
             ref.objectNumber,
             ref.generationNumber,
@@ -207,13 +207,33 @@ class PDFObjectParser extends BaseParser {
 
     const dict: DictMap = new Map();
 
+    // A file identifier (/ID) and the signed contents of a signature
+    // (/Contents) are exempt from encryption, but whether this dictionary is a
+    // cross-reference stream or a signature is only known once every key has
+    // been read. Parse those values undecrypted and revisit them at the end.
+    const deferredKeys: PDFName[] = [];
+
     while (
       !this.bytes.done() &&
       this.bytes.peek() !== CharCodes.GreaterThan &&
       this.bytes.peekAhead(1) !== CharCodes.GreaterThan
     ) {
       const key = this.parseName();
+      this.skipWhitespaceAndComments();
+
+      const isDeferred =
+        !!this.cryptoFactory &&
+        !!ref &&
+        !this.suppressDecryption &&
+        (key === PDFName.of('ID') || key === PDFName.of('Contents'));
+
+      const prevSuppress = this.suppressDecryption;
+      if (isDeferred) this.suppressDecryption = true;
       const value = this.parseObject(ref);
+      this.suppressDecryption = prevSuppress;
+
+      if (isDeferred) deferredKeys.push(key);
+
       dict.set(key, value);
       this.skipWhitespaceAndComments();
     }
@@ -224,6 +244,16 @@ class PDFObjectParser extends BaseParser {
 
     const Type = dict.get(PDFName.of('Type'));
 
+    for (let idx = 0, len = deferredKeys.length; idx < len; idx++) {
+      const key = deferredKeys[idx];
+      const isExempt =
+        (key === PDFName.of('ID') && Type === PDFName.of('XRef')) ||
+        (key === PDFName.of('Contents') && Type === PDFName.of('Sig'));
+      if (isExempt) continue;
+
+      dict.set(key, this.decryptStrings(dict.get(key)!, ref!));
+    }
+
     if (Type === PDFName.of('Catalog')) {
       return PDFCatalog.fromMapWithContext(dict, this.context);
     } else if (Type === PDFName.of('Pages')) {
@@ -233,6 +263,28 @@ class PDFObjectParser extends BaseParser {
     } else {
       return PDFDict.fromMapWithContext(dict, this.context);
     }
+  }
+
+  /** Decrypts every string held by `object`, for values parsed undecrypted. */
+  private decryptStrings(object: PDFObject, ref: PDFRef): PDFObject {
+    const decrypt = (bytes: Uint8Array) =>
+      this.cryptoFactory!.createCipherTransform(
+        ref.objectNumber,
+        ref.generationNumber,
+      ).decryptBytes(bytes);
+
+    if (object instanceof PDFHexString) {
+      return PDFHexString.fromBytes(decrypt(object.asBytes()));
+    }
+    if (object instanceof PDFString) {
+      return PDFString.of(arrayAsString(decrypt(object.asBytes())));
+    }
+    if (object instanceof PDFArray) {
+      for (let idx = 0, len = object.size(); idx < len; idx++) {
+        object.set(idx, this.decryptStrings(object.get(idx), ref));
+      }
+    }
+    return object;
   }
 
   protected parseDictOrStream(ref?: PDFRef): PDFDict | PDFStream {
@@ -270,7 +322,9 @@ class PDFObjectParser extends BaseParser {
 
     let contents = this.bytes.slice(start, end);
 
-    if (this.cryptoFactory && ref) {
+    // XRef streams are not encrypted by pdf-lib (and often by other writers).
+    const isXRef = dict.lookup(PDFName.of('Type')) === PDFName.of('XRef');
+    if (this.cryptoFactory && ref && !isXRef) {
       const transform = this.cryptoFactory.createCipherTransform(
         ref.objectNumber,
         ref.generationNumber,
