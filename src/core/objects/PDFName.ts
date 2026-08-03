@@ -9,12 +9,21 @@ import {
   toHexString,
 } from '../../utils';
 
+// Both decoders below scan for a `#` before running their regular expression.
+// Escaped characters are rare, yet these run on every name that is parsed or
+// interned, and `replace` costs considerably more than the scan even when it
+// matches nothing.
+
 /** Decodes hex escapes in a name token read from PDF syntax (case-insensitive). */
 export const decodePdfNameEscapes = (name: string) =>
-  name.replace(/#([0-9A-Fa-f]{2})/g, (_, hex) => charFromHexCode(hex));
+  name.indexOf('#') === -1
+    ? name
+    : name.replace(/#([0-9A-Fa-f]{2})/g, (_, hex) => charFromHexCode(hex));
 
 const decodeName = (name: string) =>
-  name.replace(/#([\dABCDEF]{2})/g, (_, hex) => charFromHexCode(hex));
+  name.indexOf('#') === -1
+    ? name
+    : name.replace(/#([\dABCDEF]{2})/g, (_, hex) => charFromHexCode(hex));
 
 const isRegularChar = (charCode: number) =>
   charCode >= CharCodes.ExclamationPoint &&
