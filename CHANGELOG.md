@@ -17,6 +17,10 @@
   - The trailer's `/Size` is now derived from the highest object number actually written rather than the highest the context holds, so dropping stale objects cannot overstate it.
   - Revision 6 key derivation uses Node's `crypto` when the host provides it, taking a derivation from ~20 ms to ~0.5 ms. Algorithm 2.B is costly by design — at least 64 rounds of hashing and AES-encrypting ~2 KB each — and encrypting a document derives four keys, so `encrypt()` followed by `save()` drops from ~120 ms to ~20 ms on a small file. Browsers, Deno, React Native and Node older than 20.16 keep the JavaScript implementation, which is verified to derive byte-identical keys. `crypto` is reached through `process.getBuiltinModule` rather than a static import, leaving the browser bundles free of any Node dependency.
   - Speed up conversion of CryptoJS word arrays to bytes, which allocated an intermediate JavaScript array one byte at a time before copying it into a `Uint8Array`.
+  - Speed up name interning in `PDFName.of()`, on a hot path of the whole library.
+  - Fixed a quadratic insertion in the cross-reference stream, halving the time of a save that uses object streams.
+  - Parsing and writing now yield through `setImmediate` on Node instead of `setTimeout(fn, 0)`, which Node clamps to a millisecond. Loading and saving a large document is about 4 times faster. Hosts without `setImmediate`, browsers among them, keep `setTimeout`.
+  - Speed up the fallback that locates `endstream` when a stream's `/Length` is an indirect reference or is wrong.
 
 **Imported changes from 2.8.0 to 2.8.1 (from cantoo/fork):**
 
