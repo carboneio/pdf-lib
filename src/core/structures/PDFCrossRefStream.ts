@@ -65,6 +65,17 @@ class PDFCrossRefStream extends PDFFlateStream {
   }
 
   private appendEntry(entry: Entry) {
+    // `entries` has to stay sorted by object number, because `computeIndex`
+    // derives the `/Index` subsections from the gaps between consecutive
+    // entries. Writers add entries in ascending order, so testing the tail
+    // first settles the common case without scanning: searching for the
+    // insertion point on every entry made building the table quadratic.
+    const lastEntry = this.entries[this.entries.length - 1];
+    if (!lastEntry || lastEntry.ref.objectNumber < entry.ref.objectNumber) {
+      this.entries.push(entry);
+      return;
+    }
+
     const eind = this.entries.findIndex(
       (e) => e.ref.objectNumber > entry.ref.objectNumber,
     );
