@@ -1,5 +1,9 @@
 # Changelog
 
+## v2.8.1
+
+  - Fixed the release build which broke the 2.8.0 publication. Re-publish as 2.8.1.
+
 ## v2.8.0
 
   - Fixed password encryption so document properties (Title, Author, Subject and the other Info strings) are encrypted on save and decrypted on load. Encrypted files now open correctly in Chrome, Preview, pdfinfo and qpdf.

@@ -1,6 +1,6 @@
 {
   "name": "@carboneio/pdf-lib",
-  "version": "2.8.0",
+  "version": "2.8.1",
   "description": "Create and modify PDF files with JavaScript",
   "author": "Andrew Dillon <andrew.dillon.j@gmail.com>",
   "packageManager": "npm@10.9.0+",
@@ -65,7 +65,7 @@
     "build:esm:min": "rollup --config rollup.config.mjs --file dist/pdf-lib.esm.min.js --environment MINIFY,MODULE_TYPE:es",
     "build:umd": "rollup --config rollup.config.mjs --file dist/pdf-lib.js --environment MODULE_TYPE:umd",
     "build:umd:min": "rollup --config rollup.config.mjs --file dist/pdf-lib.min.js --environment MINIFY,MODULE_TYPE:umd",
-    "build:downlevel-dts": "rimraf ts3.4 && npm run downlevel-dts . ts3.4 && rimraf ts3.4/scratchpad",
+    "build:downlevel-dts": "rimraf ts3.4 && downlevel-dts . ts3.4 && rimraf ts3.4/scratchpad",
     "build:test": "npm run build:es && npm run build:umd",
     "scratchpad:start": "tsc --build scratchpad/tsconfig.json --watch",
     "scratchpad:run": "node scratchpad/build/scratchpad/index.js",
