@@ -1,5 +1,26 @@
 ## Forked by [Carbone](https://carbone.io)
 
+<div align="center">
+  <a href="https://www.npmjs.com/package/@carboneio/pdf-lib">
+    <img
+      src="https://img.shields.io/npm/v/@carboneio/pdf-lib.svg?style=flat-square"
+      alt="NPM Version"
+    />
+  </a>
+  <a href="https://prettier.io/">
+    <img
+      src="https://img.shields.io/badge/code_style-prettier-ff69b4.svg?style=flat-square"
+      alt="Prettier Badge"
+    />
+  </a>
+  <a href="https://github.com/carboneio/pdf-lib">
+    <img
+      src="https://img.shields.io/badge/Maintained%3F-yes-green.svg?style=flat-square"
+      alt="Maintenance"
+    />
+  </a>
+</div>
+
 This fork follows the fork of https://github.com/cantoo-scribe/pdf-lib and adds support for new features such as:
 - fixed numerous issues with encryption and now follows the latest encryption standards
 - optimized save, load, and encryption operations
@@ -24,39 +45,6 @@ Install with: `npm install @carboneio/pdf-lib`
 </div>
 <div align="center">
   Designed to work in any modern JavaScript runtime. Tested in Node, Browser, Deno, and React Native environments.
-</div>
-
-<br />
-
-<div align="center">
-  <!-- NPM Version -->
-  <a href="https://www.npmjs.com/package/pdf-lib">
-    <img
-      src="https://img.shields.io/npm/v/pdf-lib.svg?style=flat-square"
-      alt="NPM Version"
-    />
-  </a>
-  <!-- Build Status -->
-  <a href="https://circleci.com/gh/Hopding/pdf-lib">
-    <img
-      src="https://img.shields.io/circleci/project/github/Hopding/pdf-lib/master.svg?style=flat-square&label=CircleCI"
-      alt="CircleCI Build Status"
-    />
-  </a>
-  <!-- Prettier Badge -->
-  <a href="https://prettier.io/">
-    <img
-      src="https://img.shields.io/badge/code_style-prettier-ff69b4.svg?style=flat-square"
-      alt="Prettier Badge"
-    />
-  </a>
-  <!-- Discord Badge -->
-  <a href="https://discord.gg/Y7uuVMc">
-    <img
-      src="https://img.shields.io/static/v1?label=discord&message=pdf-lib&color=566fbb&style=flat-square"
-      alt="Discord Badge"
-    />
-  </a>
 </div>
 
 <br />
