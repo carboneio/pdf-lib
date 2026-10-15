@@ -1295,7 +1295,7 @@ pdfDoc.setTitle('Invoice 2026-0001')
 pdfDoc.setAuthor('ACME GmbH')
 
 await embedFacturX(pdfDoc, invoiceXmlBytes, {
-  // MINIMUM | BASIC_WL | BASIC | EN 16931 | EXTENDED | XRECHNUNG
+  // MINIMUM | BASIC WL | BASIC | EN 16931 | EXTENDED | XRECHNUNG
   conformanceLevel: 'EN 16931',
 })
 

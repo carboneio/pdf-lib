@@ -101,6 +101,10 @@ import {
   readCatalogMetadataXml,
   readCatalogPDFAConformance,
 } from './pdfa/catalogMetadata';
+import type {
+  PDFOptionalContentGroup,
+  OptionalContentVisibilityUpdate,
+} from '../core/interactive/OptionalContent';
 
 export type BasePDFAttachment = {
   name: string;
@@ -424,6 +428,67 @@ export default class PDFDocument {
       form.deleteXFA();
     }
     return form;
+  }
+
+  /**
+   * List this document's optional content groups (PDF "layers"), if any.
+   * Visibility reflects the default configuration (`/OCProperties` `/D`).
+   * Returns an empty array when the document has no `/OCProperties`.
+   *
+   * For example:
+   * ```js
+   * const layers = pdfDoc.getOptionalContentGroups()
+   * layers.forEach((layer) => console.log(layer.name, layer.visible))
+   * ```
+   */
+  getOptionalContentGroups(): PDFOptionalContentGroup[] {
+    return this.catalog.getOCProperties()?.getGroups() ?? [];
+  }
+
+  /**
+   * Set the default visibility of an optional content group (layer) so PDF
+   * readers open the file with that layer on or off. Matches by layer name
+   * (all groups with that name) or by indirect `PDFRef`.
+   *
+   * For example:
+   * ```js
+   * pdfDoc.setOptionalContentGroupVisibility('Watermark', false)
+   * pdfDoc.setOptionalContentGroupVisibility([
+   *   { name: 'Notes', visible: false },
+   *   { ref: layers[0].ref, visible: true },
+   * ])
+   * ```
+   *
+   * This updates `/OCProperties` `/D` (`/ON`, `/OFF`, `/BaseState`) only. It
+   * does not remove layer content from page streams.
+   */
+  setOptionalContentGroupVisibility(
+    nameOrRef: string | PDFRef,
+    visible: boolean,
+  ): void;
+  setOptionalContentGroupVisibility(
+    updates: OptionalContentVisibilityUpdate[],
+  ): void;
+  setOptionalContentGroupVisibility(
+    nameOrRefOrUpdates: string | PDFRef | OptionalContentVisibilityUpdate[],
+    visible?: boolean,
+  ): void {
+    const ocProperties = this.catalog.getOCProperties();
+    if (!ocProperties) {
+      throw new Error('This document has no optional content properties');
+    }
+
+    const updates: OptionalContentVisibilityUpdate[] = Array.isArray(
+      nameOrRefOrUpdates,
+    )
+      ? nameOrRefOrUpdates
+      : [
+          nameOrRefOrUpdates instanceof PDFRef
+            ? { ref: nameOrRefOrUpdates, visible: visible as boolean }
+            : { name: nameOrRefOrUpdates, visible: visible as boolean },
+        ];
+
+    ocProperties.setVisibility(updates);
   }
 
   /**
@@ -814,7 +879,9 @@ export default class PDFDocument {
       options.colorComponents !== undefined;
 
     if (shouldUpdateOutputIntent) {
-      const iccStream = this.context.stream(iccProfile, {
+      // PDF/A permits FlateDecode on ICC streams; the XMP packet stays
+      // unfiltered in writeCatalogMetadataXml.
+      const iccStream = this.context.flateStream(iccProfile, {
         N: colorComponents,
       });
       const outputIntent = this.context.obj({
@@ -1531,16 +1598,19 @@ export default class PDFDocument {
    * See also: [[registerFontkit]]
    * @param font The input data for a font.
    * @param options The options to be used when embedding the font.
+   *   For font collections (`.ttc` / `.dfont`), set `options.postscriptName`
+   *   to select a face.
    * @returns Resolves with the embedded font.
    */
   async embedFont(
     font: StandardFonts | BinaryData,
     options: EmbedFontOptions = {},
   ): Promise<PDFFont> {
-    const { subset = false, customName, features } = options;
+    const { subset = false, customName, features, postscriptName } = options;
 
     assertIs(font, 'font', ['string', ArrayBuffer, 'ArrayBufferView']);
     assertIs(subset, 'subset', ['boolean']);
+    assertOrUndefined(postscriptName, 'postscriptName', ['string']);
 
     let embedder: CustomFontEmbedder | StandardFontEmbedder;
     if (isStandardFont(font)) {
@@ -1554,8 +1624,15 @@ export default class PDFDocument {
             bytes,
             customName,
             features,
+            postscriptName,
           )
-        : await CustomFontEmbedder.for(fontkit, bytes, customName, features);
+        : await CustomFontEmbedder.for(
+            fontkit,
+            bytes,
+            customName,
+            features,
+            postscriptName,
+          );
     } else {
       throw new TypeError(
         '`font` must be one of `StandardFonts | string | ArrayBuffer | ArrayBufferView`',
