@@ -11,6 +11,7 @@ Backported from [cantoo-scribe/pdf-lib](https://github.com/cantoo-scribe/pdf-lib
   - Added `EmbedFontOptions.postscriptName` to select a face from TrueType/DFont collections (`.ttc` / `.dfont`) when embedding with fontkit.
   - Hardened custom-font / fontkit interop for upstream `fontkit` v2 and `@types/fontkit` (font collections, optional font tables, subset `includeGlyph` return values).
   - `PDFDocument.convertToPDFA()` now Flate-compresses the OutputIntent ICC profile (`/Filter /FlateDecode`). PDF/A permits this on ICC streams; the XMP packet stays uncompressed.
+  - Fixed `embedFacturX()`, which now writes Factur-X `fx:ConformanceLevel` as `BASIC WL` (with a space), matching the profile URN. `'BASIC_WL'` is still accepted and normalised to the spaced form.
 
 ## v2.8.1
 
