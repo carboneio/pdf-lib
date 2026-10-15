@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+Backported from [cantoo-scribe/pdf-lib](https://github.com/cantoo-scribe/pdf-lib):
+
+  - Added `PDFPage.extractContents()`, which returns typed `PdfAsset[]` (text, images, and approximate vector `graphics` as SVG) from page content streams. Text is decoded via ToUnicode / WinAnsi and includes `x`, `y`, `fontSize`, and `fontFamily`. Image XObjects become JPEG or PNG bytes with page-space position. Painted paths become `kind: 'graphics'` with `getSvg()`. Form XObjects are traversed. Path-outlined text is not extracted as text.
+
 ## v2.8.1
 
   - Fixed the release build which broke the 2.8.0 publication. Re-publish as 2.8.1.
