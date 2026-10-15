@@ -12,6 +12,7 @@ Backported from [cantoo-scribe/pdf-lib](https://github.com/cantoo-scribe/pdf-lib
   - Hardened custom-font / fontkit interop for upstream `fontkit` v2 and `@types/fontkit` (font collections, optional font tables, subset `includeGlyph` return values).
   - `PDFDocument.convertToPDFA()` now Flate-compresses the OutputIntent ICC profile (`/Filter /FlateDecode`). PDF/A permits this on ICC streams; the XMP packet stays uncompressed.
   - Fixed `embedFacturX()`, which now writes Factur-X `fx:ConformanceLevel` as `BASIC WL` (with a space), matching the profile URN. `'BASIC_WL'` is still accepted and normalised to the spaced form.
+  - Fixed decryption of PDFs whose `/Encrypt` crypt filters (`/CF`, `/StdCF`, …) are indirect objects (e.g. iText 2.x). `CipherTransformFactory` now resolves those entries with `lookup` instead of `get`.
 
 ## v2.8.1
 
