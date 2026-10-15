@@ -54,6 +54,7 @@
     "test": "jest --config jest.config.js --runInBand",
     "testw": "jest --config jest.config.js --watch",
     "testc": "jest --config jest.config.js --coverage && open coverage/index.html",
+    "test:build": "node scripts/smoke-test.mjs",
     "lint-staged": "lint-staged",
     "lint": "npm run lint:prettier && npm run lint:eslint",
     "lint:eslint": "eslint . --fix",
