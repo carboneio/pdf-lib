@@ -8,6 +8,8 @@ Backported from [cantoo-scribe/pdf-lib](https://github.com/cantoo-scribe/pdf-lib
   - Fixed catalog name trees for embedded files and document JavaScript, which are now kept in PDF lexical order by re-sorting flat `/Names` entries on insert (required by ISO 32000). Existing `/Kids` trees and other incompatible name-tree shapes are left untouched instead of creating an invalid sibling `/Names` array.
   - Fixed loading of truncated PDFs: an unterminated trailing object is now dropped instead of failing the whole parse, and the parser rewinds so a following xref section or trailer is still read. Strict mode (`throwOnInvalidObject`) is unchanged.
   - Added optional content (PDF layers) helpers: `PDFDocument.getOptionalContentGroups()` and `PDFDocument.setOptionalContentGroupVisibility()` update the default `/OCProperties` `/D` configuration (`/ON`, `/OFF`, `/BaseState`) so viewers open layers in the requested state. Also available via `catalog.getOCProperties()`.
+  - Added `EmbedFontOptions.postscriptName` to select a face from TrueType/DFont collections (`.ttc` / `.dfont`) when embedding with fontkit.
+  - Hardened custom-font / fontkit interop for upstream `fontkit` v2 and `@types/fontkit` (font collections, optional font tables, subset `includeGlyph` return values).
 
 ## v2.8.1
 

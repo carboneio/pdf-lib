@@ -1596,16 +1596,19 @@ export default class PDFDocument {
    * See also: [[registerFontkit]]
    * @param font The input data for a font.
    * @param options The options to be used when embedding the font.
+   *   For font collections (`.ttc` / `.dfont`), set `options.postscriptName`
+   *   to select a face.
    * @returns Resolves with the embedded font.
    */
   async embedFont(
     font: StandardFonts | BinaryData,
     options: EmbedFontOptions = {},
   ): Promise<PDFFont> {
-    const { subset = false, customName, features } = options;
+    const { subset = false, customName, features, postscriptName } = options;
 
     assertIs(font, 'font', ['string', ArrayBuffer, 'ArrayBufferView']);
     assertIs(subset, 'subset', ['boolean']);
+    assertOrUndefined(postscriptName, 'postscriptName', ['string']);
 
     let embedder: CustomFontEmbedder | StandardFontEmbedder;
     if (isStandardFont(font)) {
@@ -1619,8 +1622,15 @@ export default class PDFDocument {
             bytes,
             customName,
             features,
+            postscriptName,
           )
-        : await CustomFontEmbedder.for(fontkit, bytes, customName, features);
+        : await CustomFontEmbedder.for(
+            fontkit,
+            bytes,
+            customName,
+            features,
+            postscriptName,
+          );
     } else {
       throw new TypeError(
         '`font` must be one of `StandardFonts | string | ArrayBuffer | ArrayBufferView`',
