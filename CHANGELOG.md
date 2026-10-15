@@ -10,6 +10,7 @@ Backported from [cantoo-scribe/pdf-lib](https://github.com/cantoo-scribe/pdf-lib
   - Added optional content (PDF layers) helpers: `PDFDocument.getOptionalContentGroups()` and `PDFDocument.setOptionalContentGroupVisibility()` update the default `/OCProperties` `/D` configuration (`/ON`, `/OFF`, `/BaseState`) so viewers open layers in the requested state. Also available via `catalog.getOCProperties()`.
   - Added `EmbedFontOptions.postscriptName` to select a face from TrueType/DFont collections (`.ttc` / `.dfont`) when embedding with fontkit.
   - Hardened custom-font / fontkit interop for upstream `fontkit` v2 and `@types/fontkit` (font collections, optional font tables, subset `includeGlyph` return values).
+  - `PDFDocument.convertToPDFA()` now Flate-compresses the OutputIntent ICC profile (`/Filter /FlateDecode`). PDF/A permits this on ICC streams; the XMP packet stays uncompressed.
 
 ## v2.8.1
 
