@@ -7,6 +7,7 @@ Backported from [cantoo-scribe/pdf-lib](https://github.com/cantoo-scribe/pdf-lib
   - Added `PDFPage.extractContents()`, which returns typed `PdfAsset[]` (text, images, and approximate vector `graphics` as SVG) from page content streams. Text is decoded via ToUnicode / WinAnsi and includes `x`, `y`, `fontSize`, and `fontFamily`. Image XObjects become JPEG or PNG bytes with page-space position. Painted paths become `kind: 'graphics'` with `getSvg()`. Form XObjects are traversed. Path-outlined text is not extracted as text.
   - Fixed catalog name trees for embedded files and document JavaScript, which are now kept in PDF lexical order by re-sorting flat `/Names` entries on insert (required by ISO 32000). Existing `/Kids` trees and other incompatible name-tree shapes are left untouched instead of creating an invalid sibling `/Names` array.
   - Fixed loading of truncated PDFs: an unterminated trailing object is now dropped instead of failing the whole parse, and the parser rewinds so a following xref section or trailer is still read. Strict mode (`throwOnInvalidObject`) is unchanged.
+  - Added optional content (PDF layers) helpers: `PDFDocument.getOptionalContentGroups()` and `PDFDocument.setOptionalContentGroupVisibility()` update the default `/OCProperties` `/D` configuration (`/ON`, `/OFF`, `/BaseState`) so viewers open layers in the requested state. Also available via `catalog.getOCProperties()`.
 
 ## v2.8.1
 
