@@ -1129,7 +1129,7 @@ describe('PDFDocument', () => {
         pdfDoc.setTitle('Unit Test');
       };
 
-      await expect(noErrorFunc()).resolves.not.toThrowError();
+      await expect(noErrorFunc()).resolves.not.toThrow();
     });
   });
 
@@ -1164,7 +1164,7 @@ describe('PDFDocument', () => {
         expect(pdfBytes3.byteLength).not.toEqual(pdfBytes2.byteLength);
       };
 
-      await expect(noErrorFunc()).resolves.not.toThrowError();
+      await expect(noErrorFunc()).resolves.not.toThrow();
     });
 
     it('returns the full pdf, when pdf not open for incremental update', async () => {
@@ -1308,8 +1308,8 @@ describe('PDFDocument', () => {
         expect(pdfIncrementalBytes.byteLength).toBeGreaterThan(0);
       };
 
-      await expect(noErrorFunc(0)).resolves.not.toThrowError();
-      await expect(noErrorFunc(1)).resolves.not.toThrowError();
+      await expect(noErrorFunc(0)).resolves.not.toThrow();
+      await expect(noErrorFunc(1)).resolves.not.toThrow();
     });
 
     it('can be used with object-stream PDFs', async () => {
@@ -1331,7 +1331,7 @@ describe('PDFDocument', () => {
         expect(pdfIncrementalBytes.byteLength).toBeGreaterThan(0);
       };
 
-      await expect(noErrorFunc()).resolves.not.toThrowError();
+      await expect(noErrorFunc()).resolves.not.toThrow();
     });
 
     it('saves deleted objects', async () => {
@@ -1349,8 +1349,8 @@ describe('PDFDocument', () => {
         );
       };
 
-      await expect(noErrorFunc(0)).resolves.not.toThrowError();
-      await expect(noErrorFunc(1)).resolves.not.toThrowError();
+      await expect(noErrorFunc(0)).resolves.not.toThrow();
+      await expect(noErrorFunc(1)).resolves.not.toThrow();
     });
 
     it('respects PDF version for XREF generation', async () => {
@@ -2098,8 +2098,8 @@ describe('PDFDocument', () => {
         );
       };
 
-      await expect(noErrorFunc(0)).resolves.not.toThrowError();
-      await expect(noErrorFunc(1)).resolves.not.toThrowError();
+      await expect(noErrorFunc(0)).resolves.not.toThrow();
+      await expect(noErrorFunc(1)).resolves.not.toThrow();
     });
 
     it('can be used with object-stream PDFs', async () => {
@@ -2127,7 +2127,7 @@ describe('PDFDocument', () => {
         );
       };
 
-      await expect(noErrorFunc()).resolves.not.toThrowError();
+      await expect(noErrorFunc()).resolves.not.toThrow();
     });
 
     it('registers deleted objects', async () => {
@@ -2201,8 +2201,8 @@ describe('PDFDocument', () => {
         expect(finalPdfBytes).toEqual(pdfSaveBytes);
       };
 
-      await expect(noErrorFunc(0)).resolves.not.toThrowError();
-      await expect(noErrorFunc(1)).resolves.not.toThrowError();
+      await expect(noErrorFunc(0)).resolves.not.toThrow();
+      await expect(noErrorFunc(1)).resolves.not.toThrow();
     });
   });
 
@@ -2566,8 +2566,8 @@ describe('PDFDocument', () => {
         );
       };
 
-      await expect(noErrorFunc(0)).resolves.not.toThrowError();
-      await expect(noErrorFunc(1)).resolves.not.toThrowError();
+      await expect(noErrorFunc(0)).resolves.not.toThrow();
+      await expect(noErrorFunc(1)).resolves.not.toThrow();
     });
 
     it('can be used with object-stream PDFs', async () => {
@@ -2595,7 +2595,7 @@ describe('PDFDocument', () => {
         );
       };
 
-      await expect(noErrorFunc()).resolves.not.toThrowError();
+      await expect(noErrorFunc()).resolves.not.toThrow();
     });
 
     it('produces same output than manual incremental update', async () => {
@@ -2627,8 +2627,8 @@ describe('PDFDocument', () => {
         );
       };
 
-      await expect(noErrorFunc(0)).resolves.not.toThrowError();
-      await expect(noErrorFunc(1)).resolves.not.toThrowError();
+      await expect(noErrorFunc(0)).resolves.not.toThrow();
+      await expect(noErrorFunc(1)).resolves.not.toThrow();
     });
   });
 
