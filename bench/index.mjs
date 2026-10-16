@@ -42,7 +42,7 @@ const writeFixtures = async (dir) => {
   writeFileSync(join(dir, 'encrypted.pdf'), encrypted);
   mkdirSync(join(dir, 'reports'));
   reports.forEach((bytes, index) => {
-    const name = `report-${String(index + 1).padStart(2, '0')}.pdf`;
+    const name = `report-${String(index + 1).padStart(3, '0')}.pdf`;
     writeFileSync(join(dir, 'reports', name), bytes);
   });
 };

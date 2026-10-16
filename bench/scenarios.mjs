@@ -115,12 +115,24 @@ export const scenarios = [
   {
     id: 'merge-reports',
     label: 'Merge 20 reports built from one template',
-    run: ({ PDFDocument }, { reports }) => mergeAll(PDFDocument, reports),
+    run: ({ PDFDocument }, { reports }) =>
+      mergeAll(PDFDocument, reports.slice(0, 20)),
   },
   {
     id: 'merge-reports-dedupe',
     label: 'Merge 20 reports with `dedupeContent` (Carbone only)',
     // Cantoo has no such option and ignores it, so its column is a plain merge.
+    run: ({ PDFDocument }, { reports }) =>
+      mergeAll(PDFDocument, reports.slice(0, 20), { dedupeContent: true }),
+  },
+  {
+    id: 'merge-200-reports',
+    label: 'Merge 200 reports built from one template',
+    run: ({ PDFDocument }, { reports }) => mergeAll(PDFDocument, reports),
+  },
+  {
+    id: 'merge-200-reports-dedupe',
+    label: 'Merge 200 reports with `dedupeContent` (Carbone only)',
     run: ({ PDFDocument }, { reports }) =>
       mergeAll(PDFDocument, reports, { dedupeContent: true }),
   },
@@ -221,7 +233,7 @@ export const scenarios = [
   },
 ];
 
-const REPORT_COUNT = 20;
+const REPORT_COUNT = 200;
 
 /**
  * A two-page invoice such as a template engine produces: every report shares

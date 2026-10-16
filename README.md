@@ -143,24 +143,26 @@ Install with: `npm install @carboneio/pdf-lib`
 
 <!-- BENCHMARK:START -->
 
-Median duration of one operation, lower is better. Measured on Node v24.19.0, Darwin 24.6.0 arm64, Apple M4 Max, commit `27eeee3e`, 2026-10-16.
+Median duration of one operation, lower is better. Measured on Node v24.19.0, Darwin 24.6.0 arm64, Apple M4 Max, commit `02aa113d`, 2026-10-16.
 
 | Scenario | @carboneio/pdf-lib | @cantoo/pdf-lib 2.11.1 | Difference | Output size (Carbone / Cantoo) |
 | --- | ---: | ---: | ---: | ---: |
-| Create 100 pages of text | 91.8 ms | 103.1 ms | 1.12x faster | 211 KB / 211 KB |
-| Create and save 5,000 pages | 424.5 ms | 1113.3 ms | 2.62x faster | 1,921 KB / 1,923 KB |
-| Load and save an 8 MB PDF | 136.8 ms | 872.6 ms | 6.38x faster | 8,370 KB / 8,370 KB |
-| Merge 5 PDFs | 452.2 ms | 1521.6 ms | 3.37x faster | 3,205 KB / 3,210 KB |
-| Merge 20 reports built from one template | 348.9 ms | 29.4 ms | 11.88x slower | 8,354 KB / 8,354 KB |
-| Merge 20 reports with `dedupeContent` (Carbone only) | 152.9 ms | 29.6 ms | 5.16x slower | 624 KB / 8,354 KB |
-| Encrypt with AES-256 and save | 23.4 ms | 37.5 ms | 1.60x faster | 372 KB / 372 KB |
-| Decrypt an AES-256 PDF on load | 20.6 ms | 24.1 ms | 1.17x faster | - / - |
-| Embed 20 JPEGs, 5.5 MB in total | 8.62 ms | 10.4 ms | 1.21x faster | 5,647 KB / 5,647 KB |
-| Embed 5 PNGs, 2.5 MB in total | 284.4 ms | 407.5 ms | 1.43x faster | 3,269 KB / 3,133 KB |
-| Embed a whole TrueType font | 16.7 ms | 23.3 ms | 1.39x faster | 181 KB / 181 KB |
-| Subset a TrueType font to 300 glyphs over 10 pages | 20.1 ms | 21.8 ms | 1.09x faster | 47 KB / 47 KB |
-| Fill and flatten a form | 20.3 ms | 30.3 ms | 1.49x faster | 87 KB / 87 KB |
-| Fill a multiline field with 1,700 characters | 4.08 ms | 331.8 ms | 81.40x faster | 2 KB / 2 KB |
+| Create 100 pages of text | 91.2 ms | 102.6 ms | 1.12x faster | 211 KB / 211 KB |
+| Create and save 5,000 pages | 252.2 ms | 1109.3 ms | 4.40x faster | 1,921 KB / 1,923 KB |
+| Load and save an 8 MB PDF | 136.1 ms | 829.1 ms | 6.09x faster | 8,370 KB / 8,370 KB |
+| Merge 5 PDFs | 324.9 ms | 1367.9 ms | 4.21x faster | 3,200 KB / 3,210 KB |
+| Merge 20 reports built from one template | 22.6 ms | 29.5 ms | 1.30x faster | 8,354 KB / 8,354 KB |
+| Merge 20 reports with `dedupeContent` (Carbone only) | 15.6 ms | 29.4 ms | 1.89x faster | 624 KB / 8,354 KB |
+| Merge 200 reports built from one template | 138.9 ms | 235.7 ms | 1.70x faster | 83,553 KB / 83,555 KB |
+| Merge 200 reports with `dedupeContent` (Carbone only) | 89.2 ms | 234.3 ms | 2.63x faster | 2,563 KB / 83,555 KB |
+| Encrypt with AES-256 and save | 23.7 ms | 37.7 ms | 1.59x faster | 372 KB / 372 KB |
+| Decrypt an AES-256 PDF on load | 20.3 ms | 23.4 ms | 1.15x faster | - / - |
+| Embed 20 JPEGs, 5.5 MB in total | 8.66 ms | 10.1 ms | 1.16x faster | 5,647 KB / 5,647 KB |
+| Embed 5 PNGs, 2.5 MB in total | 283.5 ms | 403.5 ms | 1.42x faster | 3,269 KB / 3,133 KB |
+| Embed a whole TrueType font | 17.1 ms | 23.2 ms | 1.36x faster | 181 KB / 181 KB |
+| Subset a TrueType font to 300 glyphs over 10 pages | 20.0 ms | 21.8 ms | 1.09x faster | 47 KB / 47 KB |
+| Fill and flatten a form | 20.2 ms | 30.2 ms | 1.49x faster | 87 KB / 87 KB |
+| Fill a multiline field with 1,700 characters | 4.15 ms | 341.3 ms | 82.27x faster | 2 KB / 2 KB |
 
 <!-- BENCHMARK:END -->
 
