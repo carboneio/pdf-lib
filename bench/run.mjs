@@ -1,5 +1,6 @@
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
+import { join } from 'node:path';
 import { parseArgs } from 'node:util';
 import { scenarios } from './scenarios.mjs';
 
@@ -47,11 +48,17 @@ const measure = async (operation) => {
 };
 
 const { values } = parseArgs({
-  options: { lib: { type: 'string' }, encrypted: { type: 'string' } },
+  options: { lib: { type: 'string' }, fixtures: { type: 'string' } },
 });
 
 const PDFLib = libraries[values.lib]();
-const context = { encrypted: readFileSync(values.encrypted) };
+const reportsDir = join(values.fixtures, 'reports');
+const context = {
+  encrypted: readFileSync(join(values.fixtures, 'encrypted.pdf')),
+  reports: readdirSync(reportsDir)
+    .sort()
+    .map((name) => readFileSync(join(reportsDir, name))),
+};
 
 const results = {};
 for (const scenario of scenarios) {

@@ -269,6 +269,31 @@ describe('PDFPageTree', () => {
       expect(lvl1Tree1.Kids().get(3)).toBe(newLeafRef);
     });
 
+    it('appends to the root when its last kid is a page tree', () => {
+      const { context, pageTree, pageLeaf } = pageUtils();
+
+      const [lvl1Tree1Ref, lvl1Tree1] = pageTree();
+      const [lvl2Tree1Ref, lvl2Tree1] = pageTree(lvl1Tree1Ref);
+
+      const [leafRef1] = pageLeaf(lvl1Tree1Ref);
+      const [leafRef2] = pageLeaf(lvl2Tree1Ref);
+      const [leafRef3] = pageLeaf(lvl2Tree1Ref);
+
+      pushLeafNodes(lvl1Tree1, leafRef1);
+      pushTreeNodes(lvl1Tree1, lvl2Tree1Ref);
+      pushLeafNodes(lvl2Tree1, leafRef2, leafRef3);
+
+      const newLeaf = PDFPageLeaf.withContextAndParent(context, lvl1Tree1Ref);
+      const newLeafRef = context.register(newLeaf);
+      const insertionRef = lvl1Tree1.insertLeafNode(newLeafRef, 3);
+
+      expect(insertionRef).toBe(undefined);
+      expect(lvl1Tree1.Count().asNumber()).toBe(4);
+      expect(lvl2Tree1.Count().asNumber()).toBe(2);
+      expect(lvl1Tree1.Kids().size()).toBe(3);
+      expect(lvl1Tree1.Kids().get(2)).toBe(newLeafRef);
+    });
+
     it('returns the correct ref when inserting more than two levels deep', () => {
       const { context, pageTree, pageLeaf } = pageUtils();
 

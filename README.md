@@ -21,14 +21,17 @@
   </a>
 </div>
 
-This fork follows the fork of https://github.com/cantoo-scribe/pdf-lib and adds support for new features such as:
-- fixed numerous issues with encryption and now follows the latest encryption standards
-- optimized save, load, and encryption operations
-- optional **`dedupeContent`** on `PDFDocument.create()` and `PDFDocument.load()` (default **`false`**). With **`dedupeContent: true`**, copying or embedding pages from other PDFs avoids duplicating shared fonts and images and usually **reduces the size** of the saved PDF.
-- a maintained [changelog](CHANGELOG.md)
-- Runs an offline test suite that validates 4,009 test points by comparing PDFs with the reliable [QPDF library](https://github.com/qpdf/qpdf), covering encryption, merging, modifications, and all combinations.
+**This fork focuses on performance and security. Carbone uses it in production to generate, encrypt and merge PDFs at scale, up to tens of thousands of documents in a single merge.**
 
-We will maintain this project as long as we need it but cannot guarantee the support for issues too far from our own roadmap.
+It tracks [cantoo-scribe/pdf-lib](https://github.com/cantoo-scribe/pdf-lib) and keeps the same API, so switching from `@cantoo/pdf-lib` is usually a matter of changing the package name. Cantoo's features and fixes are backported regularly. What this fork adds:
+
+- **Security:** encryption is fixed and follows the current standard. `encrypt()` defaults to AES-256 whatever the PDF version, document properties and indirect strings are now encrypted too, and weak RC4 ciphers must be explicitly allowed.
+- **Speed:** 1.1x to 6x faster than Cantoo on common operations (load, save, merge, encrypt, embed). See [Performance](#performance).
+- **Smaller merged files:** the optional **`dedupeContent`** flag on `PDFDocument.create()` and `PDFDocument.load()` (default **`false`**) stores fonts and images shared by merged documents only once. Merging 200 reports built from one template drops from 82 MB to 2.5 MB.
+- **Reliability:** an offline suite of 4,009 test points compares the output with [QPDF](https://github.com/qpdf/qpdf), covering encryption, merging, modifications and their combinations.
+- **A maintained [changelog](CHANGELOG.md).**
+
+**Issues and pull requests that improve performance or security are welcome, and are handled as quickly as possible.** Please open them on [carboneio/pdf-lib](https://github.com/carboneio/pdf-lib/issues). Other requests are considered too, but may wait if they are far from our roadmap.
 
 Install with: `npm install @carboneio/pdf-lib`
 
@@ -143,20 +146,26 @@ Install with: `npm install @carboneio/pdf-lib`
 
 <!-- BENCHMARK:START -->
 
-Median duration of one operation, lower is better. Measured on Node v24.19.0, Darwin 24.6.0 arm64, Apple M4 Max, commit `66155278`, 2026-10-16.
+Median duration of one operation, lower is better. Measured on Node v24.19.0, Darwin 24.6.0 arm64, Apple M4 Max, commit `02aa113d`, 2026-10-16.
 
 | Scenario | @carboneio/pdf-lib | @cantoo/pdf-lib 2.11.1 | Difference | Output size (Carbone / Cantoo) |
 | --- | ---: | ---: | ---: | ---: |
-| Create 100 pages of text | 88.9 ms | 103.5 ms | 1.16x faster | 211 KB / 211 KB |
-| Create and save 5,000 pages | 420.0 ms | 1127.3 ms | 2.68x faster | 1,921 KB / 1,923 KB |
-| Load and save an 8 MB PDF | 138.0 ms | 866.4 ms | 6.28x faster | 8,370 KB / 8,370 KB |
-| Merge 5 PDFs | 451.8 ms | 1524.6 ms | 3.37x faster | 3,205 KB / 3,210 KB |
-| Encrypt with AES-256 and save | 23.3 ms | 37.7 ms | 1.62x faster | 372 KB / 372 KB |
-| Decrypt an AES-256 PDF on load | 20.7 ms | 23.4 ms | 1.13x faster | - / - |
-| Embed a JPEG and a PNG | 28.6 ms | 49.2 ms | 1.72x faster | 595 KB / 576 KB |
-| Embed a subset TrueType font | 16.4 ms | 12.6 ms | 1.30x slower | 9 KB / 9 KB |
-| Fill and flatten a form | 20.6 ms | 30.4 ms | 1.48x faster | 87 KB / 87 KB |
-| Fill a multiline field with 1,700 characters | 3.97 ms | 333.7 ms | 83.99x faster | 2 KB / 2 KB |
+| Create 100 pages of text | 91.2 ms | 102.6 ms | 1.12x faster | 211 KB / 211 KB |
+| Create and save 5,000 pages | 252.2 ms | 1109.3 ms | 4.40x faster | 1,921 KB / 1,923 KB |
+| Load and save an 8 MB PDF | 136.1 ms | 829.1 ms | 6.09x faster | 8,370 KB / 8,370 KB |
+| Merge 5 PDFs | 324.9 ms | 1367.9 ms | 4.21x faster | 3,200 KB / 3,210 KB |
+| Merge 20 reports built from one template | 22.6 ms | 29.5 ms | 1.30x faster | 8,354 KB / 8,354 KB |
+| Merge 20 reports with `dedupeContent` (Carbone only) | 15.6 ms | 29.4 ms | 1.89x faster | 624 KB / 8,354 KB |
+| Merge 200 reports built from one template | 138.9 ms | 235.7 ms | 1.70x faster | 83,553 KB / 83,555 KB |
+| Merge 200 reports with `dedupeContent` (Carbone only) | 89.2 ms | 234.3 ms | 2.63x faster | 2,563 KB / 83,555 KB |
+| Encrypt with AES-256 and save | 23.7 ms | 37.7 ms | 1.59x faster | 372 KB / 372 KB |
+| Decrypt an AES-256 PDF on load | 20.3 ms | 23.4 ms | 1.15x faster | - / - |
+| Embed 20 JPEGs, 5.5 MB in total | 8.66 ms | 10.1 ms | 1.16x faster | 5,647 KB / 5,647 KB |
+| Embed 5 PNGs, 2.5 MB in total | 283.5 ms | 403.5 ms | 1.42x faster | 3,269 KB / 3,133 KB |
+| Embed a whole TrueType font | 17.1 ms | 23.2 ms | 1.36x faster | 181 KB / 181 KB |
+| Subset a TrueType font to 300 glyphs over 10 pages | 20.0 ms | 21.8 ms | 1.09x faster | 47 KB / 47 KB |
+| Fill and flatten a form | 20.2 ms | 30.2 ms | 1.49x faster | 87 KB / 87 KB |
+| Fill a multiline field with 1,700 characters | 4.15 ms | 341.3 ms | 82.27x faster | 2 KB / 2 KB |
 
 <!-- BENCHMARK:END -->
 

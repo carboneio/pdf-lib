@@ -510,4 +510,162 @@ describe('PDFObjectCopier', () => {
 
     expect(c1.get(PDFName.of('X'))).toBe(c2.get(PDFName.of('X')));
   });
+
+  describe('across documents sharing a dedupe map', () => {
+    // Two sources built the same way, so their object numbers line up: an
+    // image at 1 0 R whose soft mask is at 2 0 R.
+    const copyImages = (alpha1: number[], alpha2: number[]) => {
+      const dest = PDFContext.create();
+      const streamDedup = new Map<string, PDFRef>();
+      const pixels = new Uint8Array([200, 30, 30, 200, 30, 30]);
+      const copied = [alpha1, alpha2].map((alpha) => {
+        const src = PDFContext.create();
+        src.assign(
+          PDFRef.of(2),
+          PDFRawStream.of(src.obj({ Subtype: 'Image' }), new Uint8Array(alpha)),
+        );
+        src.assign(
+          PDFRef.of(1),
+          PDFRawStream.of(
+            src.obj({ Subtype: 'Image', SMask: PDFRef.of(2) }),
+            pixels.slice(),
+          ),
+        );
+        const page = src.obj({ Image: PDFRef.of(1) });
+        const copy = PDFObjectCopier.for(src, dest, streamDedup).copy(page);
+        return copy.get(PDFName.of('Image')) as PDFRef;
+      });
+      return { dest, copied };
+    };
+
+    it('does not merge streams whose referenced streams differ', () => {
+      const { dest, copied } = copyImages([255, 0], [0, 255]);
+      expect(copied[0]).not.toBe(copied[1]);
+
+      const smaskOf = (ref: PDFRef) => {
+        const image = dest.lookup(ref) as PDFRawStream;
+        return dest.lookup(image.dict.get(PDFName.of('SMask'))) as PDFRawStream;
+      };
+      expect(Array.from(smaskOf(copied[0]).getContents())).toEqual([255, 0]);
+      expect(Array.from(smaskOf(copied[1]).getContents())).toEqual([0, 255]);
+    });
+
+    it('merges streams whose referenced streams match', () => {
+      const { copied } = copyImages([255, 0], [255, 0]);
+      expect(copied[0]).toBe(copied[1]);
+    });
+
+    it.each([
+      ['merges', 'the same', ['F1', 'F1'], true],
+      ['does not merge', 'different', ['F1', 'F2'], false],
+    ])(
+      '%s streams whose indirect resources have %s values',
+      (_verb, _values, fontNames, merged) => {
+        const dest = PDFContext.create();
+        const streamDedup = new Map<string, PDFRef>();
+        const copied = fontNames.map((fontName) => {
+          const src = PDFContext.create();
+          src.assign(PDFRef.of(2), src.obj({ Font: { F: fontName } }));
+          src.assign(
+            PDFRef.of(1),
+            PDFRawStream.of(
+              src.obj({ Subtype: 'Form', Resources: PDFRef.of(2) }),
+              new Uint8Array([1, 2, 3]),
+            ),
+          );
+          const page = src.obj({ Form: PDFRef.of(1) });
+          const copy = PDFObjectCopier.for(src, dest, streamDedup).copy(page);
+          return copy.get(PDFName.of('Form')) as PDFRef;
+        });
+        expect(copied[0] === copied[1]).toBe(merged);
+      },
+    );
+
+    it('does not merge different streams whose hashes collide', () => {
+      // Same dictionary and length, so all three share a bucket. The last two
+      // also share the content hash on little-endian hosts (883552742).
+      const contents = [
+        '0 0 m 000000 l S',
+        '0 0 m 01000z l S',
+        '0 0 m 020005 l S',
+      ];
+      const dest = PDFContext.create();
+      const streamDedup = new Map<string, PDFRef>();
+      const copied = contents.map((text) => {
+        const src = PDFContext.create();
+        src.assign(
+          PDFRef.of(1),
+          PDFRawStream.of(src.obj({}), new TextEncoder().encode(text)),
+        );
+        const page = src.obj({ Contents: PDFRef.of(1) });
+        const copy = PDFObjectCopier.for(src, dest, streamDedup).copy(page);
+        return copy.get(PDFName.of('Contents')) as PDFRef;
+      });
+
+      expect(new Set(copied).size).toBe(3);
+      const textOf = (ref: PDFRef) =>
+        new TextDecoder().decode(
+          (dest.lookup(ref) as PDFRawStream).getContents(),
+        );
+      expect(copied.map(textOf)).toEqual(contents);
+    });
+
+    it('compares streams whose bytes are unaligned views of a Node Buffer', () => {
+      const file = Buffer.from('x0 0 m 1 1 l S0 0 m 2 2 l S0 0 m 1 1 l S');
+      const views = [1, 14, 27].map((start) =>
+        file.subarray(start, start + 13),
+      );
+      const dest = PDFContext.create();
+      const streamDedup = new Map<string, PDFRef>();
+      const copied = views.map((bytes) => {
+        const src = PDFContext.create();
+        src.assign(PDFRef.of(1), PDFRawStream.of(src.obj({}), bytes));
+        const page = src.obj({ Contents: PDFRef.of(1) });
+        const copy = PDFObjectCopier.for(src, dest, streamDedup).copy(page);
+        return copy.get(PDFName.of('Contents')) as PDFRef;
+      });
+
+      expect(copied[0]).not.toBe(copied[1]);
+      expect(copied[2]).toBe(copied[0]);
+    });
+
+    it.each([
+      ['merges', 'identical bytes', [1, 2, 3, 4, 5, 6, 7], true],
+      ['does not merge', 'a different word', [1, 2, 9, 4, 5, 6, 7], false],
+      ['does not merge', 'a different tail', [1, 2, 3, 4, 5, 6, 9], false],
+    ])(
+      '%s streams with %s when Node buffers are unavailable',
+      (_verb, _difference, otherBytes, merged) => {
+        const original = Object.getOwnPropertyDescriptor(
+          process,
+          'getBuiltinModule',
+        ) as PropertyDescriptor | undefined;
+        delete (process as { getBuiltinModule?: unknown }).getBuiltinModule;
+
+        try {
+          jest.isolateModules(() => {
+            const lib =
+              require('../../src/index') as typeof import('../../src/index');
+            const dest = lib.PDFContext.create();
+            const streamDedup = new Map<string, PDFRef>();
+            const copied = [[1, 2, 3, 4, 5, 6, 7], otherBytes].map((bytes) => {
+              const src = lib.PDFContext.create();
+              src.assign(
+                lib.PDFRef.of(1),
+                lib.PDFRawStream.of(src.obj({}), new Uint8Array(bytes)),
+              );
+              const page = src.obj({ Contents: lib.PDFRef.of(1) });
+              const copier = lib.PDFObjectCopier.for(src, dest, streamDedup);
+              return copier.copy(page).get(lib.PDFName.of('Contents'));
+            });
+            expect(copied[0] === copied[1]).toBe(merged);
+          });
+        } finally {
+          if (original) {
+            Object.defineProperty(process, 'getBuiltinModule', original);
+          }
+        }
+      },
+    );
+  });
 });

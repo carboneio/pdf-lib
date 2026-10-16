@@ -61,6 +61,13 @@ class PDFPageTree extends PDFDict {
       throw new InvalidTargetIndexError(targetIndex, Count);
     }
 
+    // Appending always lands at the end of this node (see the loop below), and
+    // must not cost a walk over every page: merges append tens of thousands.
+    if (targetIndex === Count) {
+      this.insertLeafKid(Kids.size(), leafRef);
+      return undefined;
+    }
+
     let leafsRemainingUntilTarget = targetIndex;
     for (let idx = 0, len = Kids.size(); idx < len; idx++) {
       if (leafsRemainingUntilTarget === 0) {

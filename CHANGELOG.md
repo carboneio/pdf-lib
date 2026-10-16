@@ -3,6 +3,11 @@
 ## v2.11.0
 
   - Update all dependencies to remove all vulnerabilities
+  - Replaced `pako` with [`fflate`](https://www.npmjs.com/package/fflate) for Flate compression. On Node, streams of 16 KB or more go through the native zlib binding, 1.2x to 3x faster. Browsers, Deno and React Native keep fflate. `pako` is no longer a direct dependency.
+  - Fixed `dedupeContent` merging streams that are not identical. Two images with the same pixels but a different `/SMask`, or two Form XObjects with different `/Resources`, could be merged into one when their source files happened to use the same object numbers. Every match is now confirmed byte for byte, including the objects the stream refers to.
+  - Merging is now linear in the number of documents. Appending a page used to walk every page already in the document, so merging n documents cost O(n²). With `dedupeContent`, candidate streams are compared with Node's native `Buffer.compare` (a plain JavaScript loop elsewhere). Merging 200 reports is 1.7x faster than `@cantoo/pdf-lib` 2.11.1, and 2.6x faster with `dedupeContent`, which also shrinks the output from 82 MB to 2.5 MB.
+  - Filling a multiline text field or an option list with long text is much faster: line breaks are found by binary search instead of re-measuring the whole text at each candidate break. A 1,700-character field drops from 334 ms to 4 ms, with the same line breaks. Ported from [cantoo-scribe/pdf-lib#169](https://github.com/cantoo-scribe/pdf-lib/pull/169).
+  - Added `npm run bench`, which compares this fork with `@cantoo/pdf-lib` on the same operations and updates the [Performance](README.md#performance) table of the README.
 
 **Backported from [cantoo-scribe/pdf-lib](https://github.com/cantoo-scribe/pdf-lib):**
 
