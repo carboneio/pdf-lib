@@ -1,6 +1,12 @@
 ## Forked by [Carbone](https://carbone.io)
 
 <div align="center">
+  <a href="https://github.com/carboneio/pdf-lib/actions/workflows/test.yml?query=branch%3Amaster">
+    <img
+      src="https://img.shields.io/github/actions/workflow/status/carboneio/pdf-lib/test.yml?branch=master&label=build%20%26%20tests&style=flat-square"
+      alt="Build and Tests Status"
+    />
+  </a>
   <a href="https://www.npmjs.com/package/@carboneio/pdf-lib">
     <img
       src="https://img.shields.io/npm/v/@carboneio/pdf-lib.svg?style=flat-square"

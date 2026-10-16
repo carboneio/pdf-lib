@@ -4,11 +4,11 @@ updates:
     directory: /
     schedule:
       interval: weekly
-  - package-ecosystem: npm
-    directory: /bench
-    schedule:
-      interval: weekly
+    # Version updates are off: only Dependabot security updates open PRs,
+    # and they still follow the options below.
+    open-pull-requests-limit: 0
+    versioning-strategy: increase
   - package-ecosystem: github-actions
     directory: /
     schedule:
-      interval: weekly
+      interval: monthly
