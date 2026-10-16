@@ -13,8 +13,6 @@ import PDFString from './objects/PDFString';
 import PDFContext from './PDFContext';
 import PDFContentStream from './structures/PDFContentStream';
 import PDFPageLeaf from './structures/PDFPageLeaf';
-import { decodePDFRawStream } from './streams/decode';
-import { isArrayEqual } from '../utils';
 
 /**
  * PDFObjectCopier copies PDFObjects from a src context to a dest context.
@@ -37,9 +35,10 @@ import { isArrayEqual } from '../utils';
  * objects. Copying a PDFObject that is not a dictionary, array, or stream is
  * supported, but is equivalent to cloning it.
  *
- * When copying indirect objects, identical stream **payloads** (after
- * decoding) are merged only together with a matching stream-dictionary
- * fingerprint (BBox, Subtype, etc.), so page content and form XObjects are not
+ * When copying indirect objects, identical stream **payloads** (as encoded,
+ * under the same `/Filter`) are merged only together with a matching
+ * stream-dictionary fingerprint (BBox, Subtype, etc.), so page content and
+ * form XObjects are not
  * confused when byte content happens to match. Objects referenced from that
  * dictionary (`/SMask`, `/ColorSpace`, `/Resources`) are compared by value, as
  * object numbers differ between documents, and every match is confirmed byte
@@ -60,6 +59,8 @@ class PDFObjectCopier {
   private readonly dest: PDFContext;
   private readonly traversedObjects = new Map<PDFObject, PDFObject>();
   private readonly streamKeyToDestRef: Map<string, PDFRef>;
+  /** Stream buckets and indirect value fingerprints, by source object. */
+  private readonly fingerprints = new Map<PDFObject, string | undefined>();
 
   private constructor(
     src: PDFContext,
@@ -159,20 +160,16 @@ class PDFObjectCopier {
 
     const dereferencedValue = this.src.lookup(ref);
 
-    const streamKey =
-      dereferencedValue instanceof PDFStream
-        ? this.streamDedupKey(dereferencedValue, new Set())
-        : undefined;
-    if (streamKey !== undefined) {
-      const existingRef = this.streamKeyToDestRef.get(streamKey);
-      const existing = existingRef && this.dest.lookup(existingRef);
-      if (
-        existingRef &&
-        existing instanceof PDFStream &&
-        this.isSameStream(dereferencedValue as PDFStream, existing, new Set())
-      ) {
-        this.traversedObjects.set(ref, existingRef);
-        return existingRef;
+    let dedupKey: string | undefined;
+    if (dereferencedValue instanceof PDFStream) {
+      const bucket = this.streamBucket(dereferencedValue, new Set());
+      if (bucket !== undefined) {
+        const match = this.findCopiedStream(dereferencedValue, bucket);
+        if (match.ref) {
+          this.traversedObjects.set(ref, match.ref);
+          return match.ref;
+        }
+        dedupKey = match.freeKey;
       }
     }
 
@@ -182,55 +179,57 @@ class PDFObjectCopier {
     if (dereferencedValue) {
       const cloned = this.copy(dereferencedValue);
       this.dest.assign(newRef, cloned);
-
-      if (streamKey !== undefined && !this.streamKeyToDestRef.has(streamKey)) {
-        this.streamKeyToDestRef.set(streamKey, newRef);
-      }
+      if (dedupKey !== undefined) this.streamKeyToDestRef.set(dedupKey, newRef);
     }
 
     return newRef;
   };
 
-  private fnv1a32(data: Uint8Array): number {
-    let h = 2166136261;
-    for (let idx = 0, len = data.length; idx < len; idx++) {
-      h ^= data[idx];
-      h = Math.imul(h, 16777619);
-    }
-    return h >>> 0;
-  }
-
   /**
-   * The bytes a stream stands for: decoded when its filters are supported,
-   * raw otherwise.
+   * Looks for an already copied stream identical to `stream`. Its bucket is
+   * derived from the dictionary and the payload length only, so a stream with
+   * a bucket of its own is never read. Otherwise it is compared with the
+   * bucket's occupant and, if they differ, hashed into a sub-bucket. Every
+   * match is confirmed byte for byte, so collisions cost time, never output.
+   *
+   * Returns either the copy to reuse or the key under which to register the
+   * new copy, or neither when both slots hold other streams.
    */
-  private payloadOf(stream: PDFStream): {
-    bytes: Uint8Array;
-    decoded: boolean;
-  } {
-    if (stream instanceof PDFContentStream) {
-      return { bytes: stream.getUnencodedContents(), decoded: true };
-    }
-    try {
-      const bytes = decodePDFRawStream(stream as PDFRawStream).decode();
-      return { bytes, decoded: true };
-    } catch {
-      return { bytes: stream.getContents(), decoded: false };
-    }
+  private findCopiedStream(
+    stream: PDFStream,
+    bucket: string,
+  ): { ref?: PDFRef; freeKey?: string } {
+    const occupant = this.streamKeyToDestRef.get(bucket);
+    if (occupant === undefined) return { freeKey: bucket };
+    if (this.isCopyOf(stream, occupant)) return { ref: occupant };
+
+    const subBucket = `${bucket}#${hashBytes(payloadOf(stream))}`;
+    const subOccupant = this.streamKeyToDestRef.get(subBucket);
+    if (subOccupant === undefined) return { freeKey: subBucket };
+    if (this.isCopyOf(stream, subOccupant)) return { ref: subOccupant };
+    return {};
+  }
+
+  private isCopyOf(stream: PDFStream, destRef: PDFRef): boolean {
+    const candidate = this.dest.lookup(destRef);
+    return (
+      candidate instanceof PDFStream &&
+      this.isSameStream(stream, candidate, new Set())
+    );
   }
 
   /**
-   * A lookup key for a stream that may be merged with an identical one, or
+   * The bucket of a stream that may be merged with an identical one, or
    * `undefined` when it must always be copied. Object numbers mean nothing
    * outside their source document, so indirect values in the stream
-   * dictionary are keyed by the value they point to.
-   *
-   * The key only finds candidates: [[isSameStream]] confirms each match.
+   * dictionary are fingerprinted by the value they point to. The fingerprint
+   * is hashed so that buckets stay small however many documents are merged.
    */
-  private streamDedupKey(
+  private streamBucket(
     stream: PDFStream,
     visiting: Set<PDFObject>,
   ): string | undefined {
+    if (this.fingerprints.has(stream)) return this.fingerprints.get(stream);
     if (
       !(stream instanceof PDFRawStream || stream instanceof PDFContentStream) ||
       visiting.has(stream)
@@ -238,23 +237,25 @@ class PDFObjectCopier {
       return undefined;
     }
     visiting.add(stream);
+    let bucket: string | undefined;
     try {
       const dictFp = this.streamDictFingerprint(stream.dict, visiting);
-      if (dictFp === undefined) return undefined;
-      const { bytes, decoded } = this.payloadOf(stream);
-      const encoding = decoded ? '' : 'raw:';
-      return `${dictFp}:${encoding}${bytes.length}:${this.fnv1a32(bytes)}`;
+      if (dictFp !== undefined) {
+        const length = payloadOf(stream).length;
+        bucket = `${fnv1a32String(dictFp)}:${dictFp.length}:${length}`;
+      }
     } catch {
-      return undefined;
+      bucket = undefined;
     } finally {
       visiting.delete(stream);
     }
+    this.fingerprints.set(stream, bucket);
+    return bucket;
   }
 
   /**
    * Stream bodies can match while PDF semantics differ (e.g. two Form XObjects
-   * with different BBox). Include all dict entries except ones that only
-   * describe encoding of the byte payload.
+   * with different BBox), so all dictionary entries count except the lengths.
    */
   private streamDictFingerprint(
     dict: PDFDict,
@@ -262,7 +263,7 @@ class PDFObjectCopier {
   ): string | undefined {
     const ents = dict
       .entries()
-      .filter(([key]) => !STREAM_ENCODING_KEYS.has(key));
+      .filter(([key]) => !IGNORED_STREAM_KEYS.has(key));
     ents.sort((a, b) => a[0].asString().localeCompare(b[0].asString()));
     const parts = new Array<string>(ents.length);
     for (let idx = 0, len = ents.length; idx < len; idx++) {
@@ -281,24 +282,23 @@ class PDFObjectCopier {
   ): string | undefined {
     if (value instanceof PDFRef) {
       const target = context.lookup(value);
-      if (
-        target === undefined ||
-        visiting.has(target) ||
-        isDocumentStructure(target)
-      ) {
-        return undefined;
-      }
+      if (target === undefined || isDocumentStructure(target)) return undefined;
       if (target instanceof PDFStream) {
-        const key = this.streamDedupKey(target, visiting);
-        return key === undefined ? undefined : `R{${key}}`;
+        const bucket = this.streamBucket(target, visiting);
+        return bucket === undefined ? undefined : `R{${bucket}}`;
       }
+      if (this.fingerprints.has(target)) return this.fingerprints.get(target);
+      if (visiting.has(target)) return undefined;
       visiting.add(target);
+      let fp: string | undefined;
       try {
-        const fp = this.valueFingerprint(target, context, visiting);
-        return fp === undefined ? undefined : `R{${fp}}`;
+        const inner = this.valueFingerprint(target, context, visiting);
+        fp = inner === undefined ? undefined : `R{${inner}}`;
       } finally {
         visiting.delete(target);
       }
+      this.fingerprints.set(target, fp);
+      return fp;
     }
     if (value instanceof PDFArray) {
       const items = new Array<string>(value.size());
@@ -325,8 +325,9 @@ class PDFObjectCopier {
   }
 
   /**
-   * Byte-for-byte confirmation of a key match, following indirect streams on
-   * both sides, so that a hash collision can never merge different streams.
+   * Whether `a`, from the source document, and `b`, from the destination,
+   * have the same payload and dictionary, following indirect values on both
+   * sides.
    */
   private isSameStream(
     a: PDFStream,
@@ -336,14 +337,17 @@ class PDFObjectCopier {
     if (visiting.has(a)) return false;
     visiting.add(a);
     try {
-      if (!this.hasSamePayload(a, b, visiting)) return false;
+      if (a instanceof PDFRawStream !== b instanceof PDFRawStream) {
+        return false;
+      }
+      if (!bytesEqual(payloadOf(a), payloadOf(b))) return false;
 
       const entriesA = a.dict
         .entries()
-        .filter(([key]) => !STREAM_ENCODING_KEYS.has(key));
+        .filter(([key]) => !IGNORED_STREAM_KEYS.has(key));
       const entriesB = b.dict
         .entries()
-        .filter(([key]) => !STREAM_ENCODING_KEYS.has(key));
+        .filter(([key]) => !IGNORED_STREAM_KEYS.has(key));
       if (entriesA.length !== entriesB.length) return false;
       for (let idx = 0, len = entriesA.length; idx < len; idx++) {
         const [key, valueA] = entriesA[idx];
@@ -369,50 +373,6 @@ class PDFObjectCopier {
     }
   }
 
-  /**
-   * Equal encoded bytes under equal filters settle the question without
-   * decoding; otherwise the decoded bytes are compared.
-   */
-  private hasSamePayload(
-    a: PDFStream,
-    b: PDFStream,
-    visiting: Set<PDFObject>,
-  ): boolean {
-    if (
-      a instanceof PDFRawStream &&
-      b instanceof PDFRawStream &&
-      isArrayEqual(a.getContents(), b.getContents()) &&
-      this.isSameEntry(a, b, PDFName.of('Filter'), visiting) &&
-      this.isSameEntry(a, b, PDFName.of('DecodeParms'), visiting)
-    ) {
-      return true;
-    }
-    const payloadA = this.payloadOf(a);
-    const payloadB = this.payloadOf(b);
-    return (
-      payloadA.decoded === payloadB.decoded &&
-      isArrayEqual(payloadA.bytes, payloadB.bytes)
-    );
-  }
-
-  private isSameEntry(
-    a: PDFStream,
-    b: PDFStream,
-    key: PDFName,
-    visiting: Set<PDFObject>,
-  ): boolean {
-    const valueA = a.dict.get(key);
-    const valueB = b.dict.get(key);
-    if (valueA === undefined || valueB === undefined) return valueA === valueB;
-    return this.isSameValue(
-      valueA,
-      a.dict.context,
-      valueB,
-      b.dict.context,
-      visiting,
-    );
-  }
-
   private isSameValue(
     a: PDFObject,
     contextA: PDFContext,
@@ -422,6 +382,8 @@ class PDFObjectCopier {
   ): boolean {
     if (a instanceof PDFRef || b instanceof PDFRef) {
       if (!(a instanceof PDFRef && b instanceof PDFRef)) return false;
+      // `b` is then the copy of `a` this copier made or matched earlier.
+      if (this.traversedObjects.get(a) === b) return true;
       const targetA = contextA.lookup(a);
       const targetB = contextB.lookup(b);
       if (
@@ -487,12 +449,11 @@ class PDFObjectCopier {
   }
 }
 
-/** Dictionary entries that only describe how a stream payload is encoded. */
-const STREAM_ENCODING_KEYS = new Set(
-  ['Length', 'Filter', 'DecodeParms', 'DL', 'F', 'FFilter', 'FDecodeParms'].map(
-    (key) => PDFName.of(key),
-  ),
-);
+/**
+ * Entries that only restate the payload size. Everything else, `/Filter`
+ * included, is compared: payloads are compared as encoded, without decoding.
+ */
+const IGNORED_STREAM_KEYS = new Set([PDFName.of('Length'), PDFName.of('DL')]);
 
 /**
  * Objects whose value takes in the whole document, which no stream can be
@@ -507,6 +468,86 @@ const isDocumentStructure = (object: PDFObject): boolean => {
     type === PDFName.of('Pages') ||
     type === PDFName.of('Catalog')
   );
+};
+
+const payloadOf = (stream: PDFStream): Uint8Array =>
+  stream instanceof PDFContentStream
+    ? stream.getUnencodedContents()
+    : stream.getContents();
+
+/**
+ * FNV-1a over 32-bit words, four times faster than over bytes. Word order
+ * depends on the platform, which is fine for keys that never leave memory.
+ */
+const hashBytes = (bytes: Uint8Array): number => {
+  // Not `slice()`: on a Node Buffer it returns a view at the same offset.
+  const data = bytes.byteOffset % 4 === 0 ? bytes : new Uint8Array(bytes);
+  const words = new Uint32Array(data.buffer, data.byteOffset, data.length >> 2);
+  let h = 2166136261;
+  for (let idx = 0, len = words.length; idx < len; idx++) {
+    h = Math.imul(h ^ words[idx], 16777619);
+  }
+  for (let idx = words.length << 2, len = data.length; idx < len; idx++) {
+    h = Math.imul(h ^ data[idx], 16777619);
+  }
+  return h >>> 0;
+};
+
+type BytesCompare = (a: Uint8Array, b: Uint8Array) => number;
+
+interface HostWithBuiltinModules {
+  process?: { getBuiltinModule?: (id: string) => unknown };
+}
+
+/**
+ * Node's `Buffer.compare` is a `memcmp`, an order of magnitude faster than any
+ * JavaScript loop. It is loaded the same way as in `nodeCrypto.ts`, so that
+ * bundles for browsers, Deno and React Native keep working.
+ */
+const loadNativeCompare = (): BytesCompare | undefined => {
+  try {
+    const host = globalThis as HostWithBuiltinModules;
+    const module = host.process?.getBuiltinModule?.('buffer') as
+      | { Buffer?: { compare?: BytesCompare } }
+      | undefined;
+    const compare = module?.Buffer?.compare;
+    return typeof compare === 'function'
+      ? compare.bind(module!.Buffer)
+      : undefined;
+  } catch {
+    return undefined;
+  }
+};
+
+// `null` means "not looked up yet"; `undefined` means "not available here".
+let nativeCompare: BytesCompare | undefined | null = null;
+
+const bytesEqual = (a: Uint8Array, b: Uint8Array): boolean => {
+  if (a.length !== b.length) return false;
+  if (nativeCompare === null) nativeCompare = loadNativeCompare();
+  if (nativeCompare) return nativeCompare(a, b) === 0;
+
+  let idx = 0;
+  if (a.byteOffset % 4 === 0 && b.byteOffset % 4 === 0) {
+    const count = a.length >> 2;
+    const wordsA = new Uint32Array(a.buffer, a.byteOffset, count);
+    const wordsB = new Uint32Array(b.buffer, b.byteOffset, count);
+    for (; idx < count; idx++) if (wordsA[idx] !== wordsB[idx]) return false;
+    idx = count << 2;
+  }
+  for (const len = a.length; idx < len; idx++) {
+    if (a[idx] !== b[idx]) return false;
+  }
+  return true;
+};
+
+const fnv1a32String = (text: string): number => {
+  let h = 2166136261;
+  for (let idx = 0, len = text.length; idx < len; idx++) {
+    h ^= text.charCodeAt(idx);
+    h = Math.imul(h, 16777619);
+  }
+  return h >>> 0;
 };
 
 const primitiveFingerprint = (value: PDFObject): string | undefined => {
