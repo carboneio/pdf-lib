@@ -97,6 +97,7 @@ Install with: `npm install @carboneio/pdf-lib`
 - [Encryption Handling](#encryption-handling)
 - [Migrating to v1.0.0](docs/MIGRATION.md)
 - [Contributing](#contributing)
+- [How to Publish](#how-to-publish)
 - [Maintainership](#maintainership)
 - [Tutorials and Cool Stuff](#tutorials-and-cool-stuff)
 - [Prior Art](#prior-art)
@@ -2075,6 +2076,42 @@ up to the viewer to honour them.
 ## Contributing
 
 We welcome contributions from the open source community! If you are interested in contributing to `pdf-lib`, please take a look at the [CONTRIBUTING.md](docs/CONTRIBUTING.md) file. It contains information to help you get `pdf-lib` setup and running on your machine. (We try to make this as simple and fast as possible! :rocket:)
+
+## How to Publish
+
+Releases of `@carboneio/pdf-lib` are published with [release-it](https://github.com/release-it/release-it).
+
+Before you start:
+
+- Log in to npm (`npm login`) with publish rights on the `@carboneio` scope.
+- Use Node >= 22.22.
+- Check out the branch to publish, up to date with its remote and without local changes.
+- Update `CHANGELOG.md`.
+
+Then run:
+
+```sh
+npm run release
+```
+
+- `npm run release -- 2.11.0` publishes an exact version instead of asking for the increment.
+- `npm run release -- --dry-run` simulates the whole sequence without changing anything.
+
+The command:
+
+- deletes previous build outputs (`clean`);
+- checks formatting and lint rules without modifying any file (`lint:check`);
+- checks TypeScript types (`typecheck`);
+- runs the test suite (`test`);
+- builds the CommonJS, ES module, UMD and TypeScript 3.4 outputs (`build`), then smoke-tests them (`test:build`);
+- checks with release-it that the working directory is clean, that the branch tracks a remote, and that you are logged in to npm;
+- asks for the version increment (patch, minor or major), then updates `package.json` and `package-lock.json`;
+- publishes the package to npm after confirmation, asking for a one-time password if two-factor authentication is enabled;
+- creates a `Release x.y.z` commit and a `vx.y.z-carbone` tag;
+- pushes the commit and the tag (`git push --follow-tags`);
+- does not create a GitHub release.
+
+The npm publication happens before the git commit: if it fails, only `package.json` and `package-lock.json` are left modified locally.
 
 ## Maintainership
 

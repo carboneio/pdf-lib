@@ -1,6 +1,6 @@
 {
   "name": "@carboneio/pdf-lib",
-  "version": "2.11.0",
+  "version": "2.8.1",
   "description": "Create and modify PDF files with JavaScript",
   "author": "Andrew Dillon <andrew.dillon.j@gmail.com>",
   "packageManager": "npm@10.9.0+",
@@ -47,7 +47,7 @@
   ],
   "scripts": {
     "release": "npm run release:prep && release-it",
-    "release:prep": "npm run clean && npm run lint && npm run typecheck && npm run test && npm run build",
+    "release:prep": "npm run clean && npm run lint:check && npm run typecheck && npm run test && npm run build && npm run test:build",
     "get:version": "node --eval 'console.log(require(`./package.json`).version)'",
     "clean": "rimraf ts3.4 build cjs dist es scratchpad/build coverage tsBuildInfo.json apps/node-build apps/node/tsBuildInfo.json isolate*.log flamegraph.html out.pdf",
     "typecheck": "tsc --noEmit --incremental false --tsBuildInfoFile null",
@@ -58,6 +58,7 @@
     "lint-staged": "lint-staged",
     "lint": "npm run lint:prettier && npm run lint:eslint",
     "lint:eslint": "eslint . --fix",
+    "lint:check": "prettier --check \"./{src,tests,apps}/**/*.{ts,js,json,html,css}\" --log-level warn && eslint . --quiet",
     "lint:prettier": "prettier --write \"./{src,tests,apps}/**/*.{ts,js,json,html,css}\" --log-level error",
     "build": "npm run build:cjs && npm run build:es && npm run build:esm && npm run build:esm:min && npm run build:umd && npm run build:umd:min && npm run build:downlevel-dts",
     "build:cjs": "tsc --module commonjs --outDir cjs",
@@ -186,6 +187,11 @@
   "husky": {
     "hooks": {
       "pre-commit": "lint-staged"
+    }
+  },
+  "release-it": {
+    "git": {
+      "tagName": "v${version}-carbone"
     }
   }
 }
