@@ -21,14 +21,17 @@
   </a>
 </div>
 
-This fork follows the fork of https://github.com/cantoo-scribe/pdf-lib and adds support for new features such as:
-- fixed numerous issues with encryption and now follows the latest encryption standards
-- optimized save, load, and encryption operations
-- optional **`dedupeContent`** on `PDFDocument.create()` and `PDFDocument.load()` (default **`false`**). With **`dedupeContent: true`**, copying or embedding pages from other PDFs avoids duplicating shared fonts and images and usually **reduces the size** of the saved PDF.
-- a maintained [changelog](CHANGELOG.md)
-- Runs an offline test suite that validates 4,009 test points by comparing PDFs with the reliable [QPDF library](https://github.com/qpdf/qpdf), covering encryption, merging, modifications, and all combinations.
+**This fork focuses on performance and security. Carbone uses it in production to generate, encrypt and merge PDFs at scale, up to tens of thousands of documents in a single merge.**
 
-We will maintain this project as long as we need it but cannot guarantee the support for issues too far from our own roadmap.
+It tracks [cantoo-scribe/pdf-lib](https://github.com/cantoo-scribe/pdf-lib) and keeps the same API, so switching from `@cantoo/pdf-lib` is usually a matter of changing the package name. Cantoo's features and fixes are backported regularly. What this fork adds:
+
+- **Security:** encryption is fixed and follows the current standard. `encrypt()` defaults to AES-256 whatever the PDF version, document properties and indirect strings are now encrypted too, and weak RC4 ciphers must be explicitly allowed.
+- **Speed:** 1.1x to 6x faster than Cantoo on common operations (load, save, merge, encrypt, embed). See [Performance](#performance).
+- **Smaller merged files:** the optional **`dedupeContent`** flag on `PDFDocument.create()` and `PDFDocument.load()` (default **`false`**) stores fonts and images shared by merged documents only once. Merging 200 reports built from one template drops from 82 MB to 2.5 MB.
+- **Reliability:** an offline suite of 4,009 test points compares the output with [QPDF](https://github.com/qpdf/qpdf), covering encryption, merging, modifications and their combinations.
+- **A maintained [changelog](CHANGELOG.md).**
+
+**Issues and pull requests that improve performance or security are welcome, and are handled as quickly as possible.** Please open them on [carboneio/pdf-lib](https://github.com/carboneio/pdf-lib/issues). Other requests are considered too, but may wait if they are far from our roadmap.
 
 Install with: `npm install @carboneio/pdf-lib`
 
