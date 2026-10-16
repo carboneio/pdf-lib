@@ -1,4 +1,4 @@
-import { deflate } from 'pako';
+import { deflate } from '../../core/flate';
 
 import PDFArray from '../../core/objects/PDFArray';
 import PDFDict from '../../core/objects/PDFDict';
