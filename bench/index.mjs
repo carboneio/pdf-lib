@@ -1,10 +1,16 @@
 import { execFileSync, spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { createRequire } from 'node:module';
 import os from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createEncryptedFixture, scenarios } from './scenarios.mjs';
+import { createFixtures, scenarios } from './scenarios.mjs';
 
 const require = createRequire(import.meta.url);
 const ROUNDS = Number(process.env.BENCH_ROUNDS ?? 3);
@@ -29,10 +35,22 @@ const median = (values) => {
     : (sorted[middle - 1] + sorted[middle]) / 2;
 };
 
-const runLibrary = (lib, encryptedPath) => {
+const writeFixtures = async (dir) => {
+  const { encrypted, reports } = await createFixtures(
+    require('../cjs/index.js'),
+  );
+  writeFileSync(join(dir, 'encrypted.pdf'), encrypted);
+  mkdirSync(join(dir, 'reports'));
+  reports.forEach((bytes, index) => {
+    const name = `report-${String(index + 1).padStart(2, '0')}.pdf`;
+    writeFileSync(join(dir, 'reports', name), bytes);
+  });
+};
+
+const runLibrary = (lib, fixturesDir) => {
   const child = spawnSync(
     process.execPath,
-    ['--expose-gc', RUNNER, '--lib', lib, '--encrypted', encryptedPath],
+    ['--expose-gc', RUNNER, '--lib', lib, '--fixtures', fixturesDir],
     { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 },
   );
   if (child.status !== 0) {
@@ -44,16 +62,14 @@ const runLibrary = (lib, encryptedPath) => {
 const collect = async () => {
   const workDir = mkdtempSync(join(os.tmpdir(), 'pdf-lib-bench-'));
   try {
-    const encryptedPath = join(workDir, 'encrypted.pdf');
-    const encrypted = await createEncryptedFixture(require('../cjs/index.js'));
-    writeFileSync(encryptedPath, encrypted);
+    await writeFixtures(workDir);
 
     const rounds = { local: [], cantoo: [] };
     for (let round = 0; round < ROUNDS; round++) {
       const order = round % 2 === 0 ? ['local', 'cantoo'] : ['cantoo', 'local'];
       for (const lib of order) {
         console.error(`round ${round + 1}/${ROUNDS}: ${libraries[lib]}`);
-        rounds[lib].push(runLibrary(lib, encryptedPath));
+        rounds[lib].push(runLibrary(lib, workDir));
       }
     }
     return rounds;

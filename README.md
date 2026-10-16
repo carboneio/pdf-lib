@@ -143,20 +143,24 @@ Install with: `npm install @carboneio/pdf-lib`
 
 <!-- BENCHMARK:START -->
 
-Median duration of one operation, lower is better. Measured on Node v24.19.0, Darwin 24.6.0 arm64, Apple M4 Max, commit `66155278`, 2026-10-16.
+Median duration of one operation, lower is better. Measured on Node v24.19.0, Darwin 24.6.0 arm64, Apple M4 Max, commit `27eeee3e`, 2026-10-16.
 
 | Scenario | @carboneio/pdf-lib | @cantoo/pdf-lib 2.11.1 | Difference | Output size (Carbone / Cantoo) |
 | --- | ---: | ---: | ---: | ---: |
-| Create 100 pages of text | 88.9 ms | 103.5 ms | 1.16x faster | 211 KB / 211 KB |
-| Create and save 5,000 pages | 420.0 ms | 1127.3 ms | 2.68x faster | 1,921 KB / 1,923 KB |
-| Load and save an 8 MB PDF | 138.0 ms | 866.4 ms | 6.28x faster | 8,370 KB / 8,370 KB |
-| Merge 5 PDFs | 451.8 ms | 1524.6 ms | 3.37x faster | 3,205 KB / 3,210 KB |
-| Encrypt with AES-256 and save | 23.3 ms | 37.7 ms | 1.62x faster | 372 KB / 372 KB |
-| Decrypt an AES-256 PDF on load | 20.7 ms | 23.4 ms | 1.13x faster | - / - |
-| Embed a JPEG and a PNG | 28.6 ms | 49.2 ms | 1.72x faster | 595 KB / 576 KB |
-| Embed a subset TrueType font | 16.4 ms | 12.6 ms | 1.30x slower | 9 KB / 9 KB |
-| Fill and flatten a form | 20.6 ms | 30.4 ms | 1.48x faster | 87 KB / 87 KB |
-| Fill a multiline field with 1,700 characters | 3.97 ms | 333.7 ms | 83.99x faster | 2 KB / 2 KB |
+| Create 100 pages of text | 91.8 ms | 103.1 ms | 1.12x faster | 211 KB / 211 KB |
+| Create and save 5,000 pages | 424.5 ms | 1113.3 ms | 2.62x faster | 1,921 KB / 1,923 KB |
+| Load and save an 8 MB PDF | 136.8 ms | 872.6 ms | 6.38x faster | 8,370 KB / 8,370 KB |
+| Merge 5 PDFs | 452.2 ms | 1521.6 ms | 3.37x faster | 3,205 KB / 3,210 KB |
+| Merge 20 reports built from one template | 348.9 ms | 29.4 ms | 11.88x slower | 8,354 KB / 8,354 KB |
+| Merge 20 reports with `dedupeContent` (Carbone only) | 152.9 ms | 29.6 ms | 5.16x slower | 624 KB / 8,354 KB |
+| Encrypt with AES-256 and save | 23.4 ms | 37.5 ms | 1.60x faster | 372 KB / 372 KB |
+| Decrypt an AES-256 PDF on load | 20.6 ms | 24.1 ms | 1.17x faster | - / - |
+| Embed 20 JPEGs, 5.5 MB in total | 8.62 ms | 10.4 ms | 1.21x faster | 5,647 KB / 5,647 KB |
+| Embed 5 PNGs, 2.5 MB in total | 284.4 ms | 407.5 ms | 1.43x faster | 3,269 KB / 3,133 KB |
+| Embed a whole TrueType font | 16.7 ms | 23.3 ms | 1.39x faster | 181 KB / 181 KB |
+| Subset a TrueType font to 300 glyphs over 10 pages | 20.1 ms | 21.8 ms | 1.09x faster | 47 KB / 47 KB |
+| Fill and flatten a form | 20.3 ms | 30.3 ms | 1.49x faster | 87 KB / 87 KB |
+| Fill a multiline field with 1,700 characters | 4.08 ms | 331.8 ms | 81.40x faster | 2 KB / 2 KB |
 
 <!-- BENCHMARK:END -->
 
