@@ -2,6 +2,14 @@
   "compilerOptions": {
     /* Basic Options */
     "target": "es2015",
+    "lib": [
+      "es2015",
+      "es2022.error",
+      "dom",
+      "dom.iterable",
+      "webworker.importscripts",
+      "scripthost",
+    ],
     "module": "commonjs",
     "allowJs": false,
     "checkJs": false,

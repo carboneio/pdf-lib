@@ -20,6 +20,7 @@ module.exports = [
       '**/*.js.map',
       '**/*.d.ts.map',
       'tsBuildInfo.json',
+      '0perso/**',
     ],
   },
   eslint.configs.recommended,
@@ -103,6 +104,21 @@ module.exports = [
       globals: {
         Deno: 'readonly',
       },
+    },
+  },
+  {
+    // Trailing buffer writes keep their increment, matching upstream pdf.js and pdf-lib.
+    files: [
+      'src/core/crypto.ts',
+      'src/core/embedders/JpegEmbedder.ts',
+      'src/core/objects/PDFBool.ts',
+      'src/core/objects/PDFHexString.ts',
+      'src/core/objects/PDFNull.ts',
+      'src/core/objects/PDFString.ts',
+      'src/core/writers/PDFWriter.ts',
+    ],
+    rules: {
+      'no-useless-assignment': 'off',
     },
   },
 ];

@@ -21,12 +21,6 @@ class Ascii85Stream extends DecodeStream {
 
     this.stream = stream;
     this.input = new Uint8Array(5);
-
-    // Most streams increase in size when decoded, but Ascii85 streams
-    // typically shrink by ~20%.
-    if (maybeLength) {
-      maybeLength = 0.8 * maybeLength;
-    }
   }
 
   protected readBlock() {

@@ -127,7 +127,7 @@ class StandardFontEmbedder {
       const codePoint = toCodePoint(codePoints[idx])!;
       try {
         glyphs[idx] = this.encoding.encodeUnicodeCodePoint(codePoint);
-      } catch (error) {
+      } catch {
         // Replace non-WinAnsi characters with a placeholder
         glyphs[idx] = this.encoding.encodeUnicodeCodePoint(toCodePoint('?')!);
       }

@@ -1621,7 +1621,7 @@ class CipherTransformFactory {
       if (revision === 6) {
         try {
           password = unescape(encodeURIComponent(password));
-        } catch (ex) {
+        } catch {
           console.warn(
             'CipherTransformFactory: ' +
               'Unable to convert UTF8 encoded password.',
