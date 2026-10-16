@@ -143,18 +143,20 @@ Install with: `npm install @carboneio/pdf-lib`
 
 <!-- BENCHMARK:START -->
 
-Median duration of one operation, lower is better. Measured on Node v24.19.0, Darwin 24.6.0 arm64, Apple M4 Max, commit `f4eecfa2`, 2026-10-16.
+Median duration of one operation, lower is better. Measured on Node v24.19.0, Darwin 24.6.0 arm64, Apple M4 Max, commit `66155278`, 2026-10-16.
 
 | Scenario | @carboneio/pdf-lib | @cantoo/pdf-lib 2.11.1 | Difference | Output size (Carbone / Cantoo) |
 | --- | ---: | ---: | ---: | ---: |
-| Create 100 pages of text | 90.8 ms | 99.5 ms | 1.10x faster | 211 KB / 211 KB |
-| Load and save an 8 MB PDF | 131.8 ms | 944.9 ms | 7.17x faster | 8,370 KB / 8,370 KB |
-| Merge 5 PDFs | 468.1 ms | 1844.3 ms | 3.94x faster | 3,205 KB / 3,210 KB |
-| Encrypt with AES-256 and save | 22.6 ms | 36.4 ms | 1.61x faster | 372 KB / 372 KB |
-| Decrypt an AES-256 PDF on load | 19.7 ms | 23.2 ms | 1.18x faster | - / - |
-| Embed a JPEG and a PNG | 27.7 ms | 57.0 ms | 2.06x faster | 595 KB / 576 KB |
-| Embed a subset TrueType font | 12.4 ms | 16.8 ms | 1.36x faster | 9 KB / 9 KB |
-| Fill and flatten a form | 19.6 ms | 29.6 ms | 1.51x faster | 87 KB / 87 KB |
+| Create 100 pages of text | 88.9 ms | 103.5 ms | 1.16x faster | 211 KB / 211 KB |
+| Create and save 5,000 pages | 420.0 ms | 1127.3 ms | 2.68x faster | 1,921 KB / 1,923 KB |
+| Load and save an 8 MB PDF | 138.0 ms | 866.4 ms | 6.28x faster | 8,370 KB / 8,370 KB |
+| Merge 5 PDFs | 451.8 ms | 1524.6 ms | 3.37x faster | 3,205 KB / 3,210 KB |
+| Encrypt with AES-256 and save | 23.3 ms | 37.7 ms | 1.62x faster | 372 KB / 372 KB |
+| Decrypt an AES-256 PDF on load | 20.7 ms | 23.4 ms | 1.13x faster | - / - |
+| Embed a JPEG and a PNG | 28.6 ms | 49.2 ms | 1.72x faster | 595 KB / 576 KB |
+| Embed a subset TrueType font | 16.4 ms | 12.6 ms | 1.30x slower | 9 KB / 9 KB |
+| Fill and flatten a form | 20.6 ms | 30.4 ms | 1.48x faster | 87 KB / 87 KB |
+| Fill a multiline field with 1,700 characters | 3.97 ms | 333.7 ms | 83.99x faster | 2 KB / 2 KB |
 
 <!-- BENCHMARK:END -->
 

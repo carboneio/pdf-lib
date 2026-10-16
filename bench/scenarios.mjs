@@ -13,6 +13,13 @@ const LOREM =
   'Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod ' +
   'tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam.';
 
+const PARAGRAPH = (
+  'Ada grew up on the edge of the oldest ruin, where her mother ' +
+  'scavenged for a living. '
+)
+  .repeat(20)
+  .trim();
+
 const fixtures = {
   largePdf: asset('pdfs/with_large_page_count.pdf'),
   constitution: asset('pdfs/us_constitution.pdf'),
@@ -45,6 +52,18 @@ export const scenarios = [
         for (let line = 0; line < 40; line++) {
           current.drawText(LOREM, { x: 20, y: 800 - line * 19, size: 8, font });
         }
+      }
+      return doc.save();
+    },
+  },
+  {
+    id: 'many-objects',
+    label: 'Create and save 5,000 pages',
+    run: async ({ PDFDocument, StandardFonts }) => {
+      const doc = await PDFDocument.create();
+      const font = await doc.embedFont(StandardFonts.Helvetica);
+      for (let page = 0; page < 5000; page++) {
+        doc.addPage().drawText(`Page ${page + 1}`, { x: 20, y: 800, font });
       }
       return doc.save();
     },
@@ -124,6 +143,20 @@ export const scenarios = [
         if (field instanceof PDFTextField) field.setText('Benchmark');
       }
       form.flatten();
+      return doc.save();
+    },
+  },
+  {
+    id: 'long-text-field',
+    label: 'Fill a multiline field with 1,700 characters',
+    run: async ({ PDFDocument }) => {
+      const doc = await PDFDocument.create();
+      const page = doc.addPage();
+      const field = doc.getForm().createTextField('story');
+      field.enableMultiline();
+      field.addToPage(page, { x: 50, y: 300, width: 220, height: 300 });
+      field.setFontSize(8);
+      field.setText(PARAGRAPH);
       return doc.save();
     },
   },
