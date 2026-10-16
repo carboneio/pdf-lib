@@ -44,11 +44,10 @@ export class FontDecoder {
     const toUnicodeObj = font.lookup(PDFName.of('ToUnicode'));
     let toUnicode: Map<number, string> | undefined;
     let codeByteLength = 1;
-    let cmapText = '';
 
     if (toUnicodeObj instanceof PDFStream) {
       const bytes = decodeStream(toUnicodeObj);
-      cmapText = arrayAsString(bytes);
+      const cmapText = arrayAsString(bytes);
       toUnicode = parseToUnicode(cmapText);
       codeByteLength = inferCodeByteLength(cmapText, toUnicode);
     } else {

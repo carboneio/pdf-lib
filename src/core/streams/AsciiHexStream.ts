@@ -19,12 +19,6 @@ class AsciiHexStream extends DecodeStream {
     this.stream = stream;
 
     this.firstDigit = -1;
-
-    // Most streams increase in size when decoded, but AsciiHex streams shrink
-    // by 50%.
-    if (maybeLength) {
-      maybeLength = 0.5 * maybeLength;
-    }
   }
 
   protected readBlock() {

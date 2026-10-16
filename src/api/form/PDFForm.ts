@@ -379,7 +379,9 @@ export default class PDFForm {
       }
     } catch (error) {
       if (error instanceof Error) {
-        throw new Error(`Failed to parse XFA template: ${error.message}`);
+        throw new Error(`Failed to parse XFA template: ${error.message}`, {
+          cause: error,
+        });
       }
       throw error;
     }
@@ -467,9 +469,12 @@ export default class PDFForm {
         if (error.message.includes('decode')) {
           throw new Error(
             `Failed to decode XFA template stream: Invalid UTF-8 encoding. ${error.message}`,
+            { cause: error },
           );
         }
-        throw new Error(`Failed to parse XFA template: ${error.message}`);
+        throw new Error(`Failed to parse XFA template: ${error.message}`, {
+          cause: error,
+        });
       }
       throw error;
     }
@@ -504,6 +509,7 @@ export default class PDFForm {
     } catch (error) {
       throw new Error(
         `Failed to decode XFA template stream: ${error instanceof Error ? error.message : String(error)}`,
+        { cause: error },
       );
     }
 

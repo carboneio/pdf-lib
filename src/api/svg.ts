@@ -280,7 +280,7 @@ const runnersToPage = (
     const offsetX =
       anchor === 'middle' ? textWidth / 2 : anchor === 'end' ? textWidth : 0;
 
-    let offsetY = 0;
+    let offsetY: number;
     switch (dominantBaseline) {
       case 'middle':
       case 'central':
