@@ -1,4 +1,4 @@
-import { deflate } from 'pako';
+import { deflate } from './flate';
 import type { DocumentSnapshot } from '../api';
 
 import PDFHeader from './document/PDFHeader';

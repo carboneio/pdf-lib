@@ -54,6 +54,7 @@ Install with: `npm install @carboneio/pdf-lib`
 ## Table of Contents
 
 - [Features](#features)
+- [Performance](#performance)
 - [Motivation](#motivation)
 - [Usage Examples](#usage-examples)
   - [Create Document](#create-document)
@@ -135,6 +136,27 @@ Install with: `npm install @carboneio/pdf-lib`
 - Extract attachments
 - Create PDF/A documents (parts 1–3)
 - Embed Factur-X / ZUGFeRD e-invoices (PDF/A-3)
+
+## Performance
+
+`@carboneio/pdf-lib` is benchmarked against [`@cantoo/pdf-lib`](https://www.npmjs.com/package/@cantoo/pdf-lib), the fork it tracks, on the same operations and the same input files. Run `npm run bench` to measure on your machine: it builds the CommonJS output, runs each library in its own process over several alternating rounds, and rewrites the table below. The benchmark lives in [`bench/`](bench/) and is not part of the published package.
+
+<!-- BENCHMARK:START -->
+
+Median duration of one operation, lower is better. Measured on Node v24.19.0, Darwin 24.6.0 arm64, Apple M4 Max, commit `f4eecfa2`, 2026-10-16.
+
+| Scenario | @carboneio/pdf-lib | @cantoo/pdf-lib 2.11.1 | Difference | Output size (Carbone / Cantoo) |
+| --- | ---: | ---: | ---: | ---: |
+| Create 100 pages of text | 90.8 ms | 99.5 ms | 1.10x faster | 211 KB / 211 KB |
+| Load and save an 8 MB PDF | 131.8 ms | 944.9 ms | 7.17x faster | 8,370 KB / 8,370 KB |
+| Merge 5 PDFs | 468.1 ms | 1844.3 ms | 3.94x faster | 3,205 KB / 3,210 KB |
+| Encrypt with AES-256 and save | 22.6 ms | 36.4 ms | 1.61x faster | 372 KB / 372 KB |
+| Decrypt an AES-256 PDF on load | 19.7 ms | 23.2 ms | 1.18x faster | - / - |
+| Embed a JPEG and a PNG | 27.7 ms | 57.0 ms | 2.06x faster | 595 KB / 576 KB |
+| Embed a subset TrueType font | 12.4 ms | 16.8 ms | 1.36x faster | 9 KB / 9 KB |
+| Fill and flatten a form | 19.6 ms | 29.6 ms | 1.51x faster | 87 KB / 87 KB |
+
+<!-- BENCHMARK:END -->
 
 ## Motivation
 
@@ -1712,7 +1734,7 @@ This assumes you're using [npm](https://www.npmjs.com/) or [yarn](https://yarnpk
 
 ### Pinning `pako` to v2
 
-`@cantoo/pdf-lib` depends on [`pako`](https://www.npmjs.com/package/pako) v2. Some transitive dependencies still declare older ranges (`@pdf-lib/standard-fonts`, `@pdf-lib/upng`, and — if you use custom fonts — `fontkit` → `unicode-trie`). Those call sites are compatible with pako v2, so this package forces a single version via Yarn `resolutions` / npm `overrides`.
+This package compresses streams with [`fflate`](https://www.npmjs.com/package/fflate), and on Node with the built-in `zlib` for streams of 16 KB or more. It does not depend on [`pako`](https://www.npmjs.com/package/pako) itself, but some of its dependencies still do, with older ranges (`@pdf-lib/standard-fonts`, `@pdf-lib/upng`, and — if you use custom fonts — `fontkit` → `unicode-trie`). Those call sites are compatible with pako v2, so this package forces a single version via Yarn `resolutions` / npm `overrides`.
 
 That force only applies when installing **this** repository. In your own app, add the same pin if you want one `pako@2` everywhere:
 

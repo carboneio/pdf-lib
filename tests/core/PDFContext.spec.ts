@@ -1,4 +1,4 @@
-import { deflate } from 'pako';
+import { strToU8, zlibSync } from 'fflate';
 
 import {
   PDFArray,
@@ -128,7 +128,7 @@ describe('PDFContext', () => {
         '/Length 25\n',
         '>>\n',
         'stream\n',
-        deflate('stuff and things!'),
+        zlibSync(strToU8('stuff and things!')),
         '\nendstream',
       ),
     );

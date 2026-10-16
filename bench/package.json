@@ -1,0 +1,9 @@
+{
+  "name": "pdf-lib-bench",
+  "private": true,
+  "description": "Compares @carboneio/pdf-lib against @cantoo/pdf-lib. Run with `npm run bench` from the repository root.",
+  "type": "module",
+  "dependencies": {
+    "@cantoo/pdf-lib": "2.11.1"
+  }
+}

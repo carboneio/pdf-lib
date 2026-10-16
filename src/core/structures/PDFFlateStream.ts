@@ -1,4 +1,4 @@
-import { deflate } from 'pako';
+import { deflate } from '../flate';
 
 import { MethodNotImplementedError } from '../errors';
 import PDFDict from '../objects/PDFDict';

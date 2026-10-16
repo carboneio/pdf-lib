@@ -55,6 +55,7 @@
     "testw": "jest --config jest.config.js --watch",
     "testc": "jest --config jest.config.js --coverage && open coverage/index.html",
     "test:build": "node scripts/smoke-test.mjs",
+    "bench": "npm run build:cjs && npm ci --prefix bench --no-audit --no-fund && node bench/index.mjs",
     "lint-staged": "lint-staged",
     "lint": "npm run lint:prettier && npm run lint:eslint",
     "lint:eslint": "eslint . --fix",
@@ -107,9 +108,9 @@
     "@pdf-lib/upng": "^1.0.1",
     "color": "^4.2.3",
     "crypto-js": "^4.2.0",
+    "fflate": "^0.8.3",
     "html-entities": "^2.3.2",
     "node-html-better-parser": ">=1.5.9",
-    "pako": "^2.2.0",
     "tslib": ">=2"
   },
   "peerDependencies": {
@@ -138,7 +139,6 @@
     "@types/fontkit": "^2.0.9",
     "@types/jest": "^30.0.0",
     "@types/node": "^24.19.2",
-    "@types/pako": "^2.0.4",
     "@typescript-eslint/eslint-plugin": "^8.71.2",
     "@typescript-eslint/parser": "^8.71.2",
     "downlevel-dts": "^0.11.0",
